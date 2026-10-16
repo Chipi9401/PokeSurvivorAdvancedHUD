@@ -6,7 +6,7 @@ Añade zoom con la rueda del ratón, un panel de estadísticas, ayudas visuales 
 
 > **Proyecto no oficial.** No tiene relación con el autor de PokéSurvivor, ni con Nintendo, Game Freak o The Pokémon Company. Es un script de cliente que solo cambia cómo ves y manejas el juego en tu navegador.
 
-**Instalación rápida:** [Greasy Fork](https://greasyfork.org/scripts/TU_ID) · [copia en GitHub](./pokesurvivor-zoom-stats.user.js) (ver [instrucciones](#instalación))
+**Instalación rápida:** [Greasy Fork](https://greasyfork.org/scripts/600528-pokésurvivoradvancedhud) · [copia en GitHub](./pokesurvivor-zoom-stats.user.js) (ver [instrucciones](#instalación))
 
 ---
 
