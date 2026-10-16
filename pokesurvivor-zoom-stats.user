@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.12
+// @version      0.12.0
 // @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha y minimapa de aliados.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
