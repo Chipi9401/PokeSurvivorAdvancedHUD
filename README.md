@@ -9,6 +9,9 @@ Añade zoom con la rueda del ratón, un panel de estadísticas, ayudas visuales 
 **Instalación rápida:** [Greasy Fork](https://greasyfork.org/scripts/600528-pokésurvivoradvancedhud) · [copia en GitHub](./pokesurvivor-zoom-stats.user.js) (ver [instrucciones](#instalación))
 
 ---
+# AVISO PARA USUARIOS DE BRAVE 
+
+Los escudos de Brave hacen que algunas partes del script no funcionen, como el zoom y el minimapa no funcionen. La única solución es desactivarlos desde la barra de URL, el juego no tiene anuncios por lo que no debería haber problemas con popups ni similares 
 
 ## Funciones
 
@@ -49,6 +52,8 @@ Añade zoom con la rueda del ratón, un panel de estadísticas, ayudas visuales 
 - **Círculo del imán:** desactivado por defecto.
 
 - **Flechas en el borde de la pantalla:** hacia jefes (`B`), duende del tesoro (`$`), altares (`A`), manantiales (`+`), cofres (`C`) y grietas (`R`).
+
+- **Minimapa arrastrable:** donde poder ver donde se encuentran tus aliados en todo momento
 
 ### ⚡ Comodidad
 
