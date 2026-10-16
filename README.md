@@ -1,4 +1,4 @@
-# PokéSurvivor – Zoom + Stats
+# PokéSurvivorAdvancedHUD
 
 Userscript de [Tampermonkey](https://www.tampermonkey.net/) para **[PokéSurvivor](https://pokesurvivor.com)** (fan game *bullet-heaven* en el navegador, repositorio original: [JPTER78/pokesurvivor](https://github.com/JPTER78/pokesurvivor)).
 
