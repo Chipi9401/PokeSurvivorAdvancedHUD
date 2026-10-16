@@ -35,7 +35,7 @@ Los escudos de Brave hacen que algunas partes del script no funcionen, como el z
 
 - **Opcionales:** imán, bonus de XP y monedas, jefes derrotados, daño total, tickets, vínculos y objeto equipado.
 
-- ** Minimapa Arrastrable:** se mueve por su título y con doble clic vuelve a su sitio. `F8` lo oculta.
+- **Arrastrable:** se mueve por su título y con doble clic vuelve a su sitio. `F8` lo oculta.
 
 ### 🗺️ Sobre el mapa
 
