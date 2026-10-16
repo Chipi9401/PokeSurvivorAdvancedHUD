@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.11
-// @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha.
+// @version      0.12
+// @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha y minimapa de aliados.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
 // @run-at       document-start
@@ -237,7 +237,8 @@
   /* ---------- CONFIG ---------- */
   const DEF = { panel: true, fps: true, fov: true, hp: true, xp: true, hpbar: 'big', tab: 'panel', pos: null, hidden: nonReco(),
     ring: true, support: true, bossHp: true, haz: true, magnet: false, arrows: true, poi: true,
-    pauseBlur: true, shiftWheel: true, alerts: true, title: true, autoMove: false };
+    pauseBlur: true, shiftWheel: true, alerts: true, title: true, autoMove: false,
+    mini: true, miniSize: 'medium', miniRange: 'mid', miniPos: null };
   let cfg;
   try { cfg = { ...DEF, ...JSON.parse(localStorage.getItem('ps_cfg3') || '{}') }; } catch { cfg = { ...DEF }; }
   const save = () => localStorage.setItem('ps_cfg3', JSON.stringify(cfg));
@@ -268,7 +269,7 @@
   <style>
     *{box-sizing:border-box}
     :host{font-family:'Pixelify Sans',ui-monospace,Consolas,monospace;font-size:13px;color:#e8eefc}
-    .panel,.menu{background:rgba(10,20,48,.82);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.14);
+    .panel,.menu,.mini{background:rgba(10,20,48,.82);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.14);
       border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.45)}
     .panel{position:absolute;right:10px;top:50%;transform:translateY(-50%);min-width:190px;max-width:260px;
       max-height:80vh;overflow:hidden;padding:8px 10px 10px}
@@ -326,20 +327,25 @@
     .toast.on{opacity:1}
     .menu h4 small{text-transform:none;letter-spacing:0;opacity:.7;font-weight:400}
     .hint{margin-top:8px;font-size:11px;color:#7d8db3}
+    .mini{position:absolute;left:10px;bottom:10px;display:none;overflow:hidden}
+    .mini .title{margin:0;padding:5px 8px}
+    .mini canvas{position:static;inset:auto;display:block}
   </style>
   <canvas id="ov"></canvas>
   <div class="toast" id="toast"></div>
   <input type="file" id="imp" accept="application/json,.json" style="display:none">
   <div class="panel" id="panel"><div class="title" id="drag"><i></i>PokéSurvivor HUD<small>⠿</small></div><div id="body"></div></div>
+  <div class="mini" id="mini"><div class="title" id="mdrag"><i></i>Aliados<small>⠿</small></div><canvas id="mcv"></canvas></div>
   <div class="menu" id="menu"></div>
   <div class="btn" id="btn" title="Opciones del HUD">⚙</div>`;
   document.documentElement.appendChild(host);
 
   const $ = id => root.getElementById(id);
   const panel = $('panel'), body = $('body'), handle = $('drag'), menu = $('menu'), btn = $('btn');
+  const mini = $('mini'), miniHandle = $('mdrag'), mcv = $('mcv');
 
   // que el juego no reciba nuestros clics/toques
-  for (const el of [btn, menu, handle])
+  for (const el of [btn, menu, handle, miniHandle])
     for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click', 'contextmenu'])
       el.addEventListener(ev, e => e.stopPropagation());
   btn.addEventListener('click', () => menu.classList.toggle('open'));
@@ -377,7 +383,15 @@
         ${chk('fov', 'Campo de visión (zoom)', cfg.fov)}
         ${chk('hp', 'Barra de vida', cfg.hp)}
         ${chk('xp', 'Barra de experiencia', cfg.xp)}
-        <div class="hint">Arrastra el panel por su título · doble clic = posición original · F8 = ocultar</div>
+        <h4>Minimapa de aliados</h4>
+        ${chk('mini', 'Mostrar minimapa', cfg.mini)}
+        <select data-k="miniSize">
+          <option value="small">Tamaño pequeño</option><option value="medium">Tamaño mediano</option><option value="large">Tamaño grande</option>
+        </select>
+        <select data-k="miniRange" style="margin-top:6px">
+          <option value="near">Alcance cercano</option><option value="mid">Alcance medio</option><option value="far">Alcance lejano</option>
+        </select>
+        <div class="hint">Arrastra el panel o el minimapa por su título · doble clic = posición original · F8 = ocultar panel</div>
       </div>
 
       <div class="pane" data-pane="stats">
@@ -420,38 +434,46 @@
     if (a === 'all') cfg.hidden = {};
     if (a === 'none') cfg.hidden = Object.fromEntries(STATS.map(s => [s.k, 1]));
     if (a === 'reset') cfg = { ...DEF, hidden: nonReco(), pos: null, tab: cfg.tab };
-    if (a === 'reco') cfg = { ...DEF, hidden: nonReco(), pos: cfg.pos, tab: cfg.tab };
+    if (a === 'reco') cfg = { ...DEF, hidden: nonReco(), pos: cfg.pos, miniPos: cfg.miniPos, tab: cfg.tab };
     if (a === 'export') return exportSave();
     if (a === 'import') return $('imp').click();
     save(); render();
   });
   buildMenu();
 
-  /* ---------- ARRASTRAR PANEL ---------- */
+  /* ---------- ARRASTRAR PANEL Y MINIMAPA ---------- */
   const lim = (v, a, b) => Math.max(a, Math.min(b, v));
-  function applyPos() {
-    if (!cfg.pos) { panel.style.left = panel.style.top = panel.style.right = panel.style.transform = ''; return; }
-    const x = lim(cfg.pos.x, 0, Math.max(0, innerWidth - panel.offsetWidth));
-    const y = lim(cfg.pos.y, 0, Math.max(0, innerHeight - panel.offsetHeight));
-    Object.assign(panel.style, { left: x + 'px', top: y + 'px', right: 'auto', transform: 'none' });
+  /** Hace arrastrable `el` por `handle`; la posición se guarda en cfg[key] ({x,y} o null = la de por defecto).
+      Devuelve la función que aplica la posición guardada. */
+  function setupDrag(el, handle, key) {
+    const apply = () => {
+      const pos = cfg[key];
+      if (!pos) { el.style.left = el.style.top = el.style.right = el.style.bottom = el.style.transform = ''; return; }
+      const x = lim(pos.x, 0, Math.max(0, innerWidth - el.offsetWidth));
+      const y = lim(pos.y, 0, Math.max(0, innerHeight - el.offsetHeight));
+      Object.assign(el.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto', transform: 'none' });
+    };
+    let drag = null;
+    handle.addEventListener('pointerdown', e => {
+      if (e.button) return;
+      if (!cfg[key]) { const r = el.getBoundingClientRect(); cfg[key] = { x: r.left, y: r.top }; apply(); }
+      drag = { dx: e.clientX - cfg[key].x, dy: e.clientY - cfg[key].y };
+      handle.classList.add('drag'); handle.setPointerCapture(e.pointerId);
+    });
+    handle.addEventListener('pointermove', e => {
+      if (!drag) return;
+      cfg[key] = { x: e.clientX - drag.dx, y: e.clientY - drag.dy };
+      apply();
+    });
+    const end = () => { if (!drag) return; drag = null; handle.classList.remove('drag'); save(); };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('dblclick', () => { cfg[key] = null; save(); apply(); });
+    return apply;
   }
-  let drag = null;
-  handle.addEventListener('pointerdown', e => {
-    if (e.button) return;
-    if (!cfg.pos) { const r = panel.getBoundingClientRect(); cfg.pos = { x: r.left, y: r.top }; applyPos(); }
-    drag = { dx: e.clientX - cfg.pos.x, dy: e.clientY - cfg.pos.y };
-    handle.classList.add('drag'); handle.setPointerCapture(e.pointerId);
-  });
-  handle.addEventListener('pointermove', e => {
-    if (!drag) return;
-    cfg.pos = { x: e.clientX - drag.dx, y: e.clientY - drag.dy };
-    applyPos();
-  });
-  const endDrag = () => { if (!drag) return; drag = null; handle.classList.remove('drag'); save(); };
-  handle.addEventListener('pointerup', endDrag);
-  handle.addEventListener('pointercancel', endDrag);
-  handle.addEventListener('dblclick', () => { cfg.pos = null; save(); applyPos(); });
-  addEventListener('resize', applyPos);
+  const applyPos = setupDrag(panel, handle, 'pos');
+  const applyMiniPos = setupDrag(mini, miniHandle, 'miniPos');
+  addEventListener('resize', () => { applyPos(); applyMiniPos(); });
 
   /* ---------- RENDER ---------- */
   let player = null, lastScan = 0, frames = 0, fps = 0, t0 = performance.now();
@@ -498,6 +520,7 @@
     panel.style.display = cfg.panel && h ? 'block' : 'none';
     body.innerHTML = h;
     applyPos();
+    applyMiniPos();
   }
 
   /* ---------- AVISOS, GUARDADO, TÍTULO ---------- */
@@ -654,8 +677,75 @@
   }
   const POI_STYLE = { altar: ['#c47bff', 'A'], spring: ['#5fe08a', '+'], chest: ['#ffd23f', 'C'], rift: ['#9ae6ff', 'R'] };
 
+  /* ---------- MINIMAPA DE ALIADOS ----------
+     Centrado en tu Pokémon. Los compañeros de cooperativo salen con su color y la inicial de su nombre;
+     si están más lejos que el alcance, se pegan al borde del círculo. Caído = gris con ✕ y aro rojo. */
+  const MINI_SIZES = { small: 120, medium: 160, large: 220 };
+  const MINI_RANGE = { near: 700, mid: 1200, far: 2000 };
+  const mctx = mcv.getContext('2d');
+  let miniKey = '';
+  function miniFrame() {
+    const G = gl(), st = G?.Game?.state;
+    const p = isPlayer(player) ? player : null;
+    const show = !!(cfg.mini && p && st && st !== 'ui' && st !== 'over');
+    mini.style.display = show ? 'block' : 'none';
+    if (!show) return;
+    const S = MINI_SIZES[cfg.miniSize] || 160, R = MINI_RANGE[cfg.miniRange] || 1200;
+    const dpr = window.devicePixelRatio || 1, key = S + '@' + dpr;
+    if (key !== miniKey) {
+      miniKey = key;
+      mcv.width = mcv.height = Math.round(S * dpr);
+      mcv.style.width = mcv.style.height = S + 'px';
+    }
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mctx.clearRect(0, 0, S, S);
+    const c = S / 2, rr = c - 8, k = rr / R, now = performance.now();
+
+    // anillos de alcance y cruz
+    mctx.strokeStyle = 'rgba(255,255,255,.14)'; mctx.lineWidth = 1;
+    for (const f of [1, 0.5]) { mctx.beginPath(); mctx.arc(c, c, rr * f, 0, 6.2832); mctx.stroke(); }
+    mctx.beginPath(); mctx.moveTo(c, 4); mctx.lineTo(c, S - 4); mctx.moveTo(4, c); mctx.lineTo(S - 4, c); mctx.stroke();
+
+    // aliados
+    const mates = (G?.Coop?.active ? G.Coop.mates : []).filter(m => m.connected && m.pl);
+    for (const m of mates) {
+      const n = m.pl.net, ax = n ? n.x : m.pl.x, ay = n ? n.y : m.pl.y, dead = n ? !!n.dead : !!m.pl.dead;
+      let dx = (ax - p.x) * k, dy = (ay - p.y) * k;
+      const d = Math.hypot(dx, dy), edge = d > rr;
+      if (edge) { dx *= rr / d; dy *= rr / d; }
+      const x = c + dx, y = c + dy;
+      mctx.save();
+      if (dead) {
+        mctx.globalAlpha = 0.6 + 0.4 * Math.sin(now / 200); mctx.lineWidth = 2; mctx.strokeStyle = '#ff5c5c';
+        mctx.beginPath(); mctx.arc(x, y, 9, 0, 6.2832); mctx.stroke();
+      }
+      mctx.globalAlpha = edge ? 0.75 : 1;
+      mctx.beginPath(); mctx.arc(x, y, 6, 0, 6.2832);
+      mctx.fillStyle = dead ? '#6b7388' : (m.color || '#ffcb3d'); mctx.fill();
+      mctx.lineWidth = 2; mctx.strokeStyle = 'rgba(0,0,0,.75)'; mctx.stroke();
+      mctx.fillStyle = '#10151f'; mctx.font = '700 9px sans-serif'; mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
+      mctx.fillText(dead ? '✕' : String(m.name || '?').charAt(0).toUpperCase(), x, y + 0.5);
+      mctx.restore();
+    }
+    if (!mates.length) {
+      mctx.fillStyle = 'rgba(159,176,212,.85)'; mctx.font = '10px sans-serif'; mctx.textAlign = 'center'; mctx.textBaseline = 'bottom';
+      mctx.fillText('Sin aliados', c, S - 6);
+    }
+
+    // tú, en el centro (el triángulo apunta hacia donde te mueves)
+    mctx.save(); mctx.translate(c, c);
+    mctx.fillStyle = '#fff'; mctx.strokeStyle = 'rgba(0,0,0,.8)'; mctx.lineWidth = 2;
+    mctx.beginPath();
+    if (typeof p.moveAngle === 'number') {
+      mctx.rotate(p.moveAngle);
+      mctx.moveTo(9, 0); mctx.lineTo(-5, -5.5); mctx.lineTo(-5, 5.5); mctx.closePath();
+    } else mctx.arc(0, 0, 5, 0, 6.2832);
+    mctx.stroke(); mctx.fill(); mctx.restore();
+  }
+
   function frame() {
     requestAnimationFrame(frame);
+    miniFrame();
     const dpr = window.devicePixelRatio || 1, W = innerWidth, H = innerHeight;
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
     octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, cv.width, cv.height);
