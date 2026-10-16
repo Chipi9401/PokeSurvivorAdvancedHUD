@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.12.0
+// @version      0.15
 // @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha y minimapa de aliados.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
@@ -19,6 +19,11 @@
   /* G puede ser un `const` (no cuelga de window) y eval puede estar bloqueado por CSP,
      así que se captura en el instante en que camera.js hace `G.Camera = {...}`. */
   let G = window.G, Cam = null, last = null;
+  /* Distancia máxima de aparición de enemigos. El juego hace salir a los enemigos a outerRadius()+10..70 del jugador,
+     pero recoloca delante de ti a todo el que esté a más de 1400 px. Con mucho zoom (o en pantallas muy anchas)
+     el anillo supera esos 1400 y los enemigos rebotan sin llegar nunca: partida sin rivales. */
+  const SPAWN_MAX = 1250;
+  let spawnCap = false;                              // true solo mientras corre el código del Spawner
   const gl = () => G || window.G;
 
   function applyZoom() {
@@ -35,6 +40,11 @@
       this.VIEW_W = baseW * Z;
       this.MIN_VIEW_H = baseH * Z;
       return orig.call(this, w, h, d);
+    };
+    const origOR = C.outerRadius;
+    C.outerRadius = function () {
+      const r = origOR.apply(this, arguments);
+      return spawnCap && cfg.spawnCap ? Math.min(r, SPAWN_MAX) : r;
     };
     if (C.w) { last = [C.w * C.scale, C.h * C.scale, C.dpr]; applyZoom(); }
   }
@@ -174,8 +184,37 @@
 
   addEventListener('keydown', e => {
     if (e.key === 'Home') { Z = 1; applyZoom(); }   // Inicio = reset
+    if ((e.code === 'NumpadMultiply' || e.code === 'NumpadDivide') && cfg.shiftWheel && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const a = document.activeElement;             // Núm. * = ataque siguiente, Núm. / = anterior
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+      e.preventDefault();
+      if (!e.repeat && isPlayer(player) && inRun(player) && !player.dead && player.cycle) player.cycle(e.code === 'NumpadMultiply' ? 1 : -1);
+    }
+    if ((e.code === 'NumpadAdd' || e.code === 'NumpadSubtract') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const a = document.activeElement;             // no al escribir en un campo de texto
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+      e.preventDefault();
+      Z = clamp(Z * (e.code === 'NumpadSubtract' ? 1.1 : 1 / 1.1));   // − = ver más, + = ver menos (igual que la rueda)
+      applyZoom();
+    }
     if (e.key === 'F8') { cfg.panel = !cfg.panel; save(); render(); }
   });
+
+  /* G.Spawner.update / ahead / burst se ejecutan con el radio de aparición acotado (ver SPAWN_MAX arriba).
+     Se engancha al detectarlo, porque G.Spawner aún no existe cuando arranca el script. */
+  function patchSpawner() {
+    const S = gl()?.Spawner;
+    if (!S || S._psW) return;
+    S._psW = true;
+    for (const fn of ['update', 'ahead', 'burst']) {
+      const orig = S[fn];
+      if (typeof orig !== 'function') continue;
+      S[fn] = function () {
+        spawnCap = true;
+        try { return orig.apply(this, arguments); } finally { spawnCap = false; }
+      };
+    }
+  }
 
   /* ---------- ESTADÍSTICAS (campos reales de player.js) ---------- */
   const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -238,7 +277,7 @@
   const DEF = { panel: true, fps: true, fov: true, hp: true, xp: true, hpbar: 'big', tab: 'panel', pos: null, hidden: nonReco(),
     ring: true, support: true, bossHp: true, haz: true, magnet: false, arrows: true, poi: true,
     pauseBlur: true, shiftWheel: true, alerts: true, title: true, autoMove: false,
-    mini: true, miniSize: 'medium', miniRange: 'mid', miniPos: null };
+    mini: true, miniSize: 'medium', miniRange: 'mid', miniPos: null, spawnCap: true };
   let cfg;
   try { cfg = { ...DEF, ...JSON.parse(localStorage.getItem('ps_cfg3') || '{}') }; } catch { cfg = { ...DEF }; }
   const save = () => localStorage.setItem('ps_cfg3', JSON.stringify(cfg));
@@ -359,9 +398,10 @@
     ['magnet', 'Círculo del imán'], ['arrows', 'Flechas a jefes y duende del tesoro'],
     ['poi', 'Flechas a altares, manantiales, cofres y grietas']];
   const OPT_QOL = [
-    ['pauseBlur', 'Pausar al salir de la pestaña'], ['shiftWheel', 'Mayús + rueda: cambiar de ataque'],
+    ['pauseBlur', 'Pausar al salir de la pestaña'], ['shiftWheel', 'Cambiar de ataque: Mayús + rueda o Núm. * y /'],
     ['alerts', 'Avisos y sonido (shiny, duende, grieta)'], ['title', 'Vida y tiempo en el título de la pestaña'],
-    ['autoMove', 'Cambio automático de ataque (solo en solitario)']];
+    ['autoMove', 'Cambio automático de ataque (solo en solitario)'],
+    ['spawnCap', 'Aparición de enemigos acotada (evita partidas vacías con mucho zoom)']];
 
   const TABS = [['panel', 'Panel'], ['stats', 'Estadísticas'], ['world', 'Mundo'], ['extras', 'Extras']];
 
@@ -414,7 +454,7 @@
         ${OPT_QOL.map(([k, t]) => chk(k, t, cfg[k])).join('')}
         <h4>Guardado</h4>
         <div class="acts"><button data-a="export">Exportar</button><button data-a="import">Importar</button></div>
-        <div class="hint">Rueda = zoom · Inicio = reset zoom · Mayús + rueda = cambiar de ataque · / = buscar en la colección</div>
+        <div class="hint">Rueda o Núm. + / − = zoom · Inicio = reset zoom · Mayús + rueda o Núm. * y / = cambiar de ataque · / = buscar en la colección</div>
       </div>
 
       <div class="foot"><div class="acts"><button class="rec" data-a="reco">★ Recomendado</button><button data-a="reset">Reset</button></div></div>`;
@@ -487,6 +527,7 @@
     // Se vuelve a buscar al jugador cada 300 ms: así se engancha al nuevo al empezar otra partida
     // (el anterior sigue "válido" en `instances`, por eso no basta con comprobar si lo es).
     const now = performance.now();
+    patchSpawner();
     if (now - lastScan > 300) { player = currentPlayer(); lastScan = now; }
     const p = isPlayer(player) ? player : null;
     tick(p);
