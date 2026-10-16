@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         PokéSurvivorAdvancedHUD
+// @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.10
+// @version      0.11
 // @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
@@ -92,7 +92,7 @@
     if (H._psW) return; H._psW = true;
     const orig = H.add;
     H.add = function (h) {
-      try { const lp = findPlayer(); hazards.push({ ...h, t0: lp ? lp._psTime || 0 : 0 }); if (hazards.length > 200) hazards.shift(); } catch {}
+      try { const lp = currentPlayer(); hazards.push({ ...h, t0: lp ? lp._psTime || 0 : 0 }); if (hazards.length > 200) hazards.shift(); } catch {}
       return orig.apply(this, arguments);
     };
   }
@@ -106,7 +106,9 @@
     }
   });
 
-  /* ---------- BARRA DE VIDA DE ENEMIGOS ---------- */
+  /* ---------- BARRA DE VIDA DE ENEMIGOS ----------
+     Enemy.draw pinta su barra con dos fillRect de 3,4 px de alto. Mientras dibuja un
+     enemigo, esos dos rectángulos se agrandan (centrados en el enemigo). */
   const HPBAR = { normal: [1, 1], big: [1.5, 2.3], huge: [2, 3.4] };   // [ancho, alto]
   let curEnemy = null;
   const nativeFill = CanvasRenderingContext2D.prototype.fillRect;
@@ -146,26 +148,6 @@
       if (isEnemyClass(v)) { delete Object.prototype.Enemy; patchEnemy(v); }
     }
   });
-
-  // Reapply hooks periodically: fixes cases where the game replaces classes between runs
-  // (without this, after a reload/new run the HUD hooks are lost and stats/bars/magnet no longer update).
-  function reapplyHooks() {
-    try {
-      const W = window;
-      const GW = W.G || G;
-      if (!GW) return;
-      if (GW.Camera && (!Cam || GW.Camera !== Cam)) install(GW.Camera);
-      if (GW.Player && isPlayerClass(GW.Player) && !GW.Player._psPatched) {
-        patchPlayer(GW.Player);
-        GW.Player = wrapPlayer(GW.Player);
-        // mark to avoid double-patching
-        try { GW.Player._psPatched = true; } catch (e) {}
-      }
-      if (isHazards(GW.Hazards) && !GW.Hazards._psW) wrapHazards(GW.Hazards);
-      if (GW.Enemy && isEnemyClass(GW.Enemy) && !GW.Enemy._psPatched) { patchEnemy(GW.Enemy); GW.Enemy._psPatched = true; }
-    } catch (e) {}
-  }
-  setInterval(reapplyHooks, 1000);
 
   function inScrollable(el) {
     if (!(el instanceof Element)) return false;
@@ -270,6 +252,12 @@
     }
     return null;
   }
+  /** El jugador de la partida en curso: el propio juego lo expone en G.Game.player (null en los menús).
+      Si G.Game aún no existe, se usa la última instancia capturada. */
+  function currentPlayer() {
+    const gm = gl()?.Game;
+    return gm ? (gm.player || null) : findPlayer();
+  }
 
   /* ---------- UI (Shadow DOM: no choca con el CSS del juego) ---------- */
   const host = document.createElement('div');
@@ -356,7 +344,6 @@
       el.addEventListener(ev, e => e.stopPropagation());
   btn.addEventListener('click', () => menu.classList.toggle('open'));
 
-  /* ---------- HELPERS ---------- */
   /* ---------- MENÚ ---------- */
   const chk = (k, text, on) => `<label><input type="checkbox" data-k="${esc(k)}" ${on ? 'checked' : ''}>${esc(text)}</label>`;
 
@@ -475,10 +462,10 @@
     <div class="track"><div class="fill" style="width:${pct * 100}%;background:${color}"></div></div></div>`;
 
   function render() {
-    if (!isPlayer(player) || !instances.includes(player)) {
-      const now = performance.now();
-      if (now - lastScan > 300) { player = findPlayer(); lastScan = now; }
-    }
+    // Se vuelve a buscar al jugador cada 300 ms: así se engancha al nuevo al empezar otra partida
+    // (el anterior sigue "válido" en `instances`, por eso no basta con comprobar si lo es).
+    const now = performance.now();
+    if (now - lastScan > 300) { player = currentPlayer(); lastScan = now; }
     const p = isPlayer(player) ? player : null;
     tick(p);
 
@@ -550,14 +537,15 @@
     try {
       const j = JSON.parse(await f.text()), d = j && j.data;
       if (!d || typeof d !== 'object') throw new Error('formato');
-      if (!confirm(`¿Importar ${Object.keys(d).length} entradas del guardado del ${String(j.exported || '').slice(0, 10)}?\nSobrescribe el guardado actual de este navegador (haz esto desde el me[...]
+      if (!confirm(`¿Importar ${Object.keys(d).length} entradas del guardado del ${String(j.exported || '').slice(0, 10)}?\nSobrescribe el guardado actual de este navegador (haz esto desde el menú principal).`)) return;
       for (const [k, v] of Object.entries(d)) localStorage.setItem(k, v);
       toast('Guardado importado. Recargando…', 2000);
       setTimeout(() => location.reload(), 700);
     } catch { toast('Archivo no válido'); }
   });
 
-  /* ---------- PUNTOS DE INTERÉS (altares, manantiales, cofres, grietas) ---------- */
+  /* ---------- PUNTOS DE INTERÉS (altares, manantiales, cofres, grietas) ----------
+     Sin ver interact.js se buscan, dentro de G, listas de objetos con x/y cuyo nombre (o tipo) los delate. */
   const POI_RE = [['altar', /altar/i], ['spring', /spring|manantial/i], ['chest', /chest|cofre/i], ['rift', /rift|grieta|portal/i]];
   const kindOfStr = t => { for (const [k, r] of POI_RE) if (r.test(t)) return k; return null; };
   const spent = o => o.done || o.used || o.opened || o.taken || o.collected || o.dead || o.gone || o.claimed;
@@ -600,7 +588,7 @@
 
   function tick(p) {
     const G = gl(), now = performance.now();
-    if (p !== lastP) { lastP = p; hazards.length = 0; samples = []; seenIds.clear(); seenPoi.clear(); metrics.dps = 0; }
+    if (p !== lastP) { lastP = p; hazards.length = 0; samples = []; seenIds.clear(); seenPoi.clear(); pois = []; metrics.dps = 0; }
     if (!/^❤/.test(document.title)) baseTitle = document.title;
     if (!p || !inRun(p)) { if (/^❤/.test(document.title)) document.title = baseTitle; return; }
 
@@ -768,7 +756,9 @@
   }
   requestAnimationFrame(frame);
 
-  /* ---------- BUSCADOR EN LA COLECCIÓN (pantalla #scr-dex de menu.js) ---------- */
+  /* ---------- BUSCADOR EN LA COLECCIÓN (pantalla #scr-dex de menu.js) ----------
+     Filtra las tarjetas de la generación abierta, indica en qué otras generaciones hay resultados
+     (botones) y salta sola a una con resultados. Nombre y tipos solo de los que ya tienes; el nº, de todos. */
   (() => {
     const norm = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
     const FKEYS = ['all', 'own', 'miss', 'shiny', '5', '4', '3', '2', '1'];    // mismo orden que los chips del juego
@@ -788,7 +778,6 @@
       const i = [...document.querySelectorAll('#dex-filters .chip')].findIndex(c => c.classList.contains('on'));
       return FKEYS[i] || 'all';
     };
-
     const passNative = (p, f, sv) => {
       const own = !!sv.owned[p.dex], sh = !!(sv.shiny && sv.shiny[p.dex]);
       return !((f === 'own' && !own) || (f === 'miss' && own) || (f === 'shiny' && !sh) || (/^\d$/.test(f) && p.rarity !== +f));
