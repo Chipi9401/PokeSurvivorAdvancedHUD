@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.15
+// @version      0.16
 // @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha y minimapa de aliados.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
@@ -216,6 +216,28 @@
     }
   }
 
+  /* Espejo del temporizador de grietas de rift.js: cada 30 s (CHECK) hay una tirada con un 20 % de probabilidad,
+     solo pasados los 75 s (FROM) y solo en solitario o en el anfitrión. `checkT` es privado del juego, así que se
+     replica envolviendo G.Rift.update y G.Rift.reset con las mismas condiciones. */
+  const RIFT_CHECK = 30, RIFT_FROM = 75;
+  let riftT = RIFT_CHECK;
+  function patchRift() {
+    const R = gl()?.Rift;
+    if (!R || R._psW) return;
+    R._psW = true;
+    const oReset = R.reset, oUpdate = R.update;
+    R.reset = function () { riftT = RIFT_CHECK; return oReset.apply(this, arguments); };
+    R.update = function (dt, pl, time) {
+      try {
+        const g = gl();
+        if (!R.rift && !R.arena && time > RIFT_FROM && (!g.Coop?.active || g.Coop.isHost)) {
+          riftT -= dt; if (riftT <= 0) riftT = RIFT_CHECK;
+        }
+      } catch {}
+      return oUpdate.apply(this, arguments);
+    };
+  }
+
   /* ---------- ESTADÍSTICAS (campos reales de player.js) ---------- */
   const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmt = v => typeof v === 'number'
@@ -256,6 +278,24 @@
     { k: 'coins',      label: 'Monedas',             reco: 1, get: p => p.coins },
     { k: 'time',       label: 'Tiempo de run',       reco: 1, get: p => fmtT(p._psTime || 0) },
     { k: 'dps',        label: 'DPS (últimos 5 s)',   reco: 1, get: p => Math.round(metrics.dps) },
+    { k: 'nextBoss',   label: 'Próximo jefe',        reco: 1, get: p => {
+        const g = gl(), t = g?.Game?.st?.time;
+        if (t == null || !g.Enemies) return '—';
+        const slot = g.Enemies.BOSS_SLOTS[bossN];
+        if (!slot) return 'ninguno más';
+        let nm = ''; try { nm = g.Enemies.BOSSES[bossN]?.name || ''; } catch {}
+        const left = slot.at - t;
+        return `${nm ? nm.slice(0, 12) + ' · ' : ''}${left > 0 ? fmtT(Math.ceil(left)) : 'ya sale'}`;
+      } },
+    { k: 'rift',       label: 'Grieta',              reco: 1, get: p => {
+        const g = gl(), R = g?.Rift;
+        if (!R || g?.Game?.st?.time == null) return '—';
+        if (R.inArena) return `en la arena · ${Math.ceil(R.timeLeft)} s`;
+        if (R.rift) return `abierta · ${Math.max(0, Math.ceil(R.rift.ttl))} s`;
+        if (g.Coop?.active && !g.Coop.isHost) return '—';      // en grupo la decide el anfitrión
+        const t = g.Game.st.time;
+        return `tirada en ${fmtT(Math.ceil(t <= RIFT_FROM ? RIFT_FROM - t + RIFT_CHECK : riftT))} · 20 %`;
+      } },
     { k: 'kpm',        label: 'Derrotas por minuto', get: p => (p._psTime > 10 ? (p.kills / (p._psTime / 60)) : 0) },
     { k: 'suggest',    label: 'Mejor ataque ahora',  reco: 1, get: p => {
         const b = bestSlot(p); if (!b) return '—';
@@ -528,6 +568,7 @@
     // (el anterior sigue "válido" en `instances`, por eso no basta con comprobar si lo es).
     const now = performance.now();
     patchSpawner();
+    patchRift();
     if (now - lastScan > 300) { player = currentPlayer(); lastScan = now; }
     const p = isPlayer(player) ? player : null;
     tick(p);
@@ -648,11 +689,12 @@
 
   /* ---------- TICK (4 veces por segundo): métricas, avisos, título, auto-cambio ---------- */
   let lastP = null, samples = [], seenIds = new Set(), seenPoi = new Set(), lastAuto = -1e9, lastAutoPause = -1e9, baseTitle = '';
+  let bossN = 0; const bossIds = new Set();      // jefes normales ya aparecidos en esta run (los legendarios de grieta no cuentan)
   const inRun = p => p && performance.now() - (p._psUpd || 0) < 1500;
 
   function tick(p) {
     const G = gl(), now = performance.now();
-    if (p !== lastP) { lastP = p; hazards.length = 0; samples = []; seenIds.clear(); seenPoi.clear(); pois = []; metrics.dps = 0; }
+    if (p !== lastP) { lastP = p; hazards.length = 0; samples = []; seenIds.clear(); seenPoi.clear(); pois = []; metrics.dps = 0; bossIds.clear(); bossN = 0; }
     if (!/^❤/.test(document.title)) baseTitle = document.title;
     if (!p || !inRun(p)) { if (/^❤/.test(document.title)) document.title = baseTitle; return; }
 
@@ -661,6 +703,10 @@
     while (samples.length > 2 && t - samples[0][0] > 5) samples.shift();
     const a = samples[0];
     metrics.dps = t - a[0] > 0.4 ? Math.max(0, ((p.dmgDealt || 0) - a[1]) / (t - a[0])) : 0;
+
+    if (G?.EnemyMgr) for (const e of G.EnemyMgr.all()) {
+      if (e.boss && !e.legend && !e.judge && !bossIds.has(e.id)) { bossIds.add(e.id); bossN++; }
+    }
 
     if (cfg.alerts && G?.EnemyMgr) {
       for (const e of G.EnemyMgr.all()) {
