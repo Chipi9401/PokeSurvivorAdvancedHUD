@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.16
-// @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha y minimapa de aliados.
+// @version      0.17
+// @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha, minimapa de aliados e interfaz adaptada a móvil.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
 // @run-at       document-start
@@ -317,7 +317,8 @@
   const DEF = { panel: true, fps: true, fov: true, hp: true, xp: true, hpbar: 'big', tab: 'panel', pos: null, hidden: nonReco(),
     ring: true, support: true, bossHp: true, haz: true, magnet: false, arrows: true, poi: true,
     pauseBlur: true, shiftWheel: true, alerts: true, title: true, autoMove: false,
-    mini: true, miniSize: 'medium', miniRange: 'mid', miniPos: null, spawnCap: true };
+    mini: true, miniSize: 'medium', miniRange: 'mid', miniPos: null, spawnCap: true,
+    uiMode: 'auto', uiScale: 1, mobInit: false, btnPos: null, collapsed: false };
   let cfg;
   try { cfg = { ...DEF, ...JSON.parse(localStorage.getItem('ps_cfg3') || '{}') }; } catch { cfg = { ...DEF }; }
   const save = () => localStorage.setItem('ps_cfg3', JSON.stringify(cfg));
@@ -339,6 +340,9 @@
     return gm ? (gm.player || null) : findPlayer();
   }
 
+  /* Escala de la interfaz: UI = factor del DOM propio (vía CSS --s), UO = factor de lo que se dibuja en canvas. */
+  let UI = 1, UO = 1, mobileMode = false;
+
   /* ---------- UI (Shadow DOM: no choca con el CSS del juego) ---------- */
   const host = document.createElement('div');
   host.id = 'ps-host';
@@ -347,69 +351,89 @@
   root.innerHTML = `
   <style>
     *{box-sizing:border-box}
-    :host{font-family:'Pixelify Sans',ui-monospace,Consolas,monospace;font-size:13px;color:#e8eefc}
-    .panel,.menu,.mini{background:rgba(10,20,48,.82);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.14);
-      border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.45)}
-    .panel{position:absolute;right:10px;top:50%;transform:translateY(-50%);min-width:190px;max-width:260px;
-      max-height:80vh;overflow:hidden;padding:8px 10px 10px}
-    .title{pointer-events:auto;cursor:grab;touch-action:none;user-select:none;display:flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
-      color:#8fb3ff;padding-bottom:6px;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,.1)}
+    :host{font-family:'Pixelify Sans',ui-monospace,Consolas,monospace;font-size:calc(13 * var(--u));color:#e8eefc}
+    .panel,.menu,.mini{background:rgba(10,20,48,.82);backdrop-filter:blur(calc(6 * var(--u)));border:1px solid rgba(255,255,255,.14);
+      border-radius:calc(10 * var(--u));box-shadow:0 calc(6 * var(--u)) calc(20 * var(--u)) rgba(0,0,0,.45)}
+    .panel{position:absolute;right:calc(10 * var(--u));top:50%;transform:translateY(-50%);min-width:calc(190 * var(--u));max-width:calc(260 * var(--u));
+      max-height:80vh;overflow:hidden;padding:calc(8 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u))}
+    .title{pointer-events:auto;cursor:grab;touch-action:none;user-select:none;display:flex;align-items:center;gap:calc(6 * var(--u));font-size:calc(11 * var(--u));letter-spacing:.12em;text-transform:uppercase;
+      color:#8fb3ff;padding-bottom:calc(6 * var(--u));margin-bottom:calc(6 * var(--u));border-bottom:1px solid rgba(255,255,255,.1)}
     .title.drag{cursor:grabbing}
-    .title small{margin-left:auto;opacity:.5;font-size:10px;letter-spacing:0}
-    .title i{width:7px;height:7px;border-radius:50%;background:#46d37a;box-shadow:0 0 6px #46d37a}
-    .row{display:flex;justify-content:space-between;gap:14px;padding:2px 0}
+    .title small{margin-left:auto;opacity:.5;font-size:calc(10 * var(--u));letter-spacing:0}
+    .title i{width:calc(7 * var(--u));height:calc(7 * var(--u));border-radius:50%;background:#46d37a;box-shadow:0 0 calc(6 * var(--u)) #46d37a}
+    .row{display:flex;justify-content:space-between;gap:calc(14 * var(--u));padding:calc(2 * var(--u)) 0}
     .row span{color:#9fb0d4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .row b{font-weight:600;color:#fff;font-variant-numeric:tabular-nums}
     .good{color:#6ee79a!important}.warn{color:#ffd166!important}.bad{color:#ff6b6b!important}
-    .bar{margin:4px 0 6px}
-    .bar .lbl{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
+    .bar{margin:calc(4 * var(--u)) 0 calc(6 * var(--u))}
+    .bar .lbl{display:flex;justify-content:space-between;font-size:calc(12 * var(--u));margin-bottom:calc(3 * var(--u))}
     .bar .lbl span{color:#9fb0d4}.bar .lbl b{color:#fff;font-variant-numeric:tabular-nums}
-    .track{height:9px;border-radius:5px;background:rgba(255,255,255,.12);overflow:hidden}
-    .fill{height:100%;border-radius:5px;transition:width .2s}
-    .sep{height:1px;background:rgba(255,255,255,.1);margin:5px 0}
-    .empty{color:#7d8db3;font-style:italic;padding:2px 0}
-    .btn{position:absolute;right:10px;bottom:10px;width:34px;height:34px;border-radius:50%;cursor:pointer;
-      pointer-events:auto;display:grid;place-items:center;font-size:17px;color:#cfe0ff;
+    .track{height:calc(9 * var(--u));border-radius:calc(5 * var(--u));background:rgba(255,255,255,.12);overflow:hidden}
+    .fill{height:100%;border-radius:calc(5 * var(--u));transition:width .2s}
+    .sep{height:1px;background:rgba(255,255,255,.1);margin:calc(5 * var(--u)) 0}
+    .empty{color:#7d8db3;font-style:italic;padding:calc(2 * var(--u)) 0}
+    .btn{position:absolute;right:calc(10 * var(--u));bottom:calc(10 * var(--u));width:calc(34 * var(--u));height:calc(34 * var(--u));border-radius:50%;cursor:pointer;
+      pointer-events:auto;display:grid;place-items:center;font-size:calc(17 * var(--u));color:#cfe0ff;
       background:rgba(10,20,48,.82);border:1px solid rgba(255,255,255,.2);user-select:none}
+    .btn{touch-action:none}
     .btn:hover{background:rgba(40,70,140,.9)}
-    .menu{position:absolute;right:10px;bottom:52px;width:272px;max-height:72vh;overflow:hidden;padding:0;
+    .menu{position:absolute;right:calc(10 * var(--u));bottom:calc(52 * var(--u));width:calc(272 * var(--u));max-height:72vh;overflow:hidden;padding:0;
       pointer-events:auto;display:none;flex-direction:column}
     .menu.open{display:flex}
     .tabs{display:flex;flex:none;border-bottom:1px solid rgba(255,255,255,.12)}
-    .tabs button{flex:1;padding:9px 2px 8px;background:none;border:0;border-bottom:2px solid transparent;color:#9fb0d4;
-      font:inherit;font-size:12px;cursor:pointer}
+    .tabs button{flex:1;padding:calc(9 * var(--u)) calc(2 * var(--u)) calc(8 * var(--u));background:none;border:0;border-bottom:calc(2 * var(--u)) solid transparent;color:#9fb0d4;
+      font:inherit;font-size:calc(12 * var(--u));cursor:pointer}
     .tabs button:hover{color:#fff;background:rgba(255,255,255,.06)}
     .tabs button.on{color:#fff;border-bottom-color:#4d8dff}
-    .pane{display:none;overflow:auto;padding:10px;flex:1 1 auto;min-height:0}
+    .pane{display:none;overflow:auto;padding:calc(10 * var(--u));flex:1 1 auto;min-height:0}
     .pane.on{display:block}
-    .foot{flex:none;padding:8px 10px 9px;border-top:1px solid rgba(255,255,255,.12)}
+    .foot{flex:none;padding:calc(8 * var(--u)) calc(10 * var(--u)) calc(9 * var(--u));border-top:1px solid rgba(255,255,255,.12)}
     .foot .acts{margin-top:0}
     .foot .rec{width:auto;flex:1.7;margin:0}
-    .foot .hint{margin-top:6px}
-    .menu h4{margin:8px 0 4px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#8fb3ff;font-weight:600}
+    .foot .hint{margin-top:calc(6 * var(--u))}
+    .menu h4{margin:calc(8 * var(--u)) 0 calc(4 * var(--u));font-size:calc(11 * var(--u));letter-spacing:.1em;text-transform:uppercase;color:#8fb3ff;font-weight:600}
     .menu h4:first-child{margin-top:0}
-    label{display:flex;align-items:center;gap:8px;padding:3px 2px;cursor:pointer;border-radius:5px}
+    label{display:flex;align-items:center;gap:calc(8 * var(--u));padding:calc(3 * var(--u)) calc(2 * var(--u));cursor:pointer;border-radius:calc(5 * var(--u))}
     label:hover{background:rgba(255,255,255,.07)}
-    input[type=checkbox]{accent-color:#4d8dff;width:14px;height:14px;margin:0}
-    .acts{display:flex;gap:6px;margin-top:8px}
-    .acts button{flex:1;padding:4px 0;border-radius:6px;border:1px solid rgba(255,255,255,.2);cursor:pointer;
-      background:rgba(255,255,255,.08);color:#e8eefc;font:inherit;font-size:12px}
+    input[type=checkbox]{accent-color:#4d8dff;width:calc(14 * var(--u));height:calc(14 * var(--u));margin:0}
+    .acts{display:flex;gap:calc(6 * var(--u));margin-top:calc(8 * var(--u))}
+    .acts button{flex:1;padding:calc(4 * var(--u)) 0;border-radius:calc(6 * var(--u));border:1px solid rgba(255,255,255,.2);cursor:pointer;
+      background:rgba(255,255,255,.08);color:#e8eefc;font:inherit;font-size:calc(12 * var(--u))}
     .acts button:hover{background:rgba(255,255,255,.18)}
-    .acts .rec,.rec{width:100%;padding:6px 0;margin-bottom:6px;border-radius:7px;border:1px solid #ffd166;cursor:pointer;
+    .acts .rec,.rec{width:100%;padding:calc(6 * var(--u)) 0;margin-bottom:calc(6 * var(--u));border-radius:calc(7 * var(--u));border:1px solid #ffd166;cursor:pointer;
       background:rgba(255,209,102,.14);color:#ffd166;font:inherit;font-weight:600}
     .rec:hover{background:rgba(255,209,102,.28)}
-    select{width:100%;padding:4px 6px;border-radius:6px;background:#1a2547;color:#e8eefc;border:1px solid rgba(255,255,255,.2);font:inherit}
+    select{width:100%;padding:calc(4 * var(--u)) calc(6 * var(--u));border-radius:calc(6 * var(--u));background:#1a2547;color:#e8eefc;border:1px solid rgba(255,255,255,.2);font:inherit}
     canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-    .toast{position:absolute;left:50%;top:14%;transform:translateX(-50%);padding:7px 14px;border-radius:9px;
-      background:rgba(10,20,48,.9);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:14px;
+    .toast{position:absolute;left:50%;top:14%;transform:translateX(-50%);padding:calc(7 * var(--u)) calc(14 * var(--u));border-radius:calc(9 * var(--u));
+      background:rgba(10,20,48,.9);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:calc(14 * var(--u));
       opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap}
     .toast.on{opacity:1}
     .menu h4 small{text-transform:none;letter-spacing:0;opacity:.7;font-weight:400}
-    .hint{margin-top:8px;font-size:11px;color:#7d8db3}
-    .mini{position:absolute;left:10px;bottom:10px;display:none;overflow:hidden}
-    .mini .title{margin:0;padding:5px 8px}
+    .hint{margin-top:calc(8 * var(--u));font-size:calc(11 * var(--u));color:#7d8db3}
+    .mini{position:absolute;left:calc(10 * var(--u));bottom:calc(10 * var(--u));display:none;overflow:hidden}
+    .mini .title{margin:0;padding:calc(5 * var(--u)) calc(8 * var(--u))}
     .mini canvas{position:static;inset:auto;display:block}
-  </style>
+  
+    :host{--u:calc(1px * var(--s, 1))}
+    .pane{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+    input[type=range]{width:100%;accent-color:#4d8dff;margin:4px 0}
+    .zrow{margin:2px 0 0}
+    .panel.collapsed .title{margin-bottom:0;padding-bottom:0;border-bottom:0}
+    /* --- móvil / pantallas táctiles pequeñas --- */
+    :host(.m) .btn{width:max(44px,calc(36 * var(--u)));height:max(44px,calc(36 * var(--u)));font-size:calc(20 * var(--u));
+      top:max(56px,12%);bottom:auto;right:calc(8 * var(--u) + env(safe-area-inset-right,0px));opacity:.8}
+    :host(.m) .panel{top:max(116px,28%);transform:none;right:calc(8 * var(--u) + env(safe-area-inset-right,0px));
+      min-width:calc(150 * var(--u));max-width:calc(210 * var(--u));max-height:calc(100% - 130px)}
+    :host(.m) .title{min-height:32px}
+    :host(.m) .mini{left:calc(8 * var(--u) + env(safe-area-inset-left,0px));top:50%;bottom:auto;transform:translateY(-50%)}
+    :host(.m) .menu{top:calc(8 * var(--u) + env(safe-area-inset-top,0px));bottom:calc(8 * var(--u) + env(safe-area-inset-bottom,0px));
+      right:calc(8 * var(--u) + env(safe-area-inset-right,0px));width:min(calc(300 * var(--u)),72vw);max-height:none}
+    :host(.m) .tabs button{min-height:44px}
+    :host(.m) label{min-height:40px}
+    :host(.m) input[type=checkbox]{width:22px;height:22px}
+    :host(.m) .acts button,:host(.m) select{min-height:40px}
+</style>
   <canvas id="ov"></canvas>
   <div class="toast" id="toast"></div>
   <input type="file" id="imp" accept="application/json,.json" style="display:none">
@@ -427,7 +451,6 @@
   for (const el of [btn, menu, handle, miniHandle])
     for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click', 'contextmenu'])
       el.addEventListener(ev, e => e.stopPropagation());
-  btn.addEventListener('click', () => menu.classList.toggle('open'));
 
   /* ---------- MENÚ ---------- */
   const chk = (k, text, on) => `<label><input type="checkbox" data-k="${esc(k)}" ${on ? 'checked' : ''}>${esc(text)}</label>`;
@@ -457,6 +480,9 @@
       <div class="tabs">${TABS.map(([k, n]) => `<button data-tab="${k}">${n}</button>`).join('')}</div>
 
       <div class="pane" data-pane="panel">
+        <h4>Zoom (campo de visión)</h4>
+        <div class="zrow"><input type="range" data-k="zoom" min="0.7" max="3" step="0.05"></div>
+        <div class="acts"><button data-a="zless">Ver menos</button><button data-a="zmore">Ver más</button><button data-a="zreset">1×</button></div>
         <h4>Qué mostrar</h4>
         ${chk('panel', 'Panel de estadísticas', cfg.panel)}
         ${chk('fps', 'FPS', cfg.fps)}
@@ -471,7 +497,7 @@
         <select data-k="miniRange" style="margin-top:6px">
           <option value="near">Alcance cercano</option><option value="mid">Alcance medio</option><option value="far">Alcance lejano</option>
         </select>
-        <div class="hint">Arrastra el panel o el minimapa por su título · doble clic = posición original · F8 = ocultar panel</div>
+        <div class="hint">Arrastra el panel, el minimapa o el botón ⚙ · toca el título del panel para plegarlo · doble clic o toque = posición original · F8 = ocultar panel</div>
       </div>
 
       <div class="pane" data-pane="stats">
@@ -490,11 +516,18 @@
       </div>
 
       <div class="pane" data-pane="extras">
+        <h4>Interfaz</h4>
+        <select data-k="uiMode">
+          <option value="auto">Detectar automáticamente</option><option value="desktop">Modo escritorio</option><option value="mobile">Modo móvil</option>
+        </select>
+        <input type="range" data-k="uiScale" min="0.6" max="1.6" step="0.05">
+        <div class="hint" id="uiinfo" style="margin-top:0"></div>
+        <div class="hint" id="hookinfo"></div>
         <h4>Comodidad y ventaja</h4>
         ${OPT_QOL.map(([k, t]) => chk(k, t, cfg[k])).join('')}
         <h4>Guardado</h4>
         <div class="acts"><button data-a="export">Exportar</button><button data-a="import">Importar</button></div>
-        <div class="hint">Rueda o Núm. + / − = zoom · Inicio = reset zoom · Mayús + rueda o Núm. * y / = cambiar de ataque · / = buscar en la colección</div>
+        <div class="hint">Rueda o Núm. + / − = zoom · Inicio = reset zoom · Mayús + rueda o Núm. * y / = cambiar de ataque</div>
       </div>
 
       <div class="foot"><div class="acts"><button class="rec" data-a="reco">★ Recomendado</button><button data-a="reset">Reset</button></div></div>`;
@@ -503,21 +536,32 @@
 
   menu.addEventListener('change', e => {
     const k = e.target.dataset.k; if (!k) return;
+    if (e.target.type === 'range') { save(); return; }               // los deslizadores se aplican en 'input'
     if (k.startsWith('s:')) { if (e.target.checked) delete cfg.hidden[k.slice(2)]; else cfg.hidden[k.slice(2)] = 1; }
     else cfg[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    if (k === 'uiMode') applyUI();
     save(); render();
+  });
+  menu.addEventListener('input', e => {
+    const t = e.target; if (t.type !== 'range') return;
+    if (t.dataset.k === 'zoom') { Z = clamp(+t.value); applyZoom(); }
+    else if (t.dataset.k === 'uiScale') { cfg.uiScale = +t.value; applyUI(); }
   });
   menu.addEventListener('click', e => {
     const tab = e.target.dataset.tab;
     if (tab) { setTab(tab); return; }
     const a = e.target.dataset.a; if (!a) return;
+    if (a === 'zmore' || a === 'zless' || a === 'zreset') {
+      Z = a === 'zreset' ? 1 : clamp(Z * (a === 'zmore' ? 1.1 : 1 / 1.1)); applyZoom(); render(); return;
+    }
     if (a === 'all') cfg.hidden = {};
     if (a === 'none') cfg.hidden = Object.fromEntries(STATS.map(s => [s.k, 1]));
-    if (a === 'reset') cfg = { ...DEF, hidden: nonReco(), pos: null, tab: cfg.tab };
-    if (a === 'reco') cfg = { ...DEF, hidden: nonReco(), pos: cfg.pos, miniPos: cfg.miniPos, tab: cfg.tab };
+    if (a === 'reset') cfg = { ...DEF, hidden: nonReco(), pos: null, tab: cfg.tab, mobInit: true };
+    if (a === 'reco') cfg = { ...DEF, hidden: nonReco(), pos: cfg.pos, miniPos: cfg.miniPos, btnPos: cfg.btnPos, uiMode: cfg.uiMode, uiScale: cfg.uiScale,
+      collapsed: cfg.collapsed, tab: cfg.tab, mobInit: true, ...recoPreset() };
     if (a === 'export') return exportSave();
     if (a === 'import') return $('imp').click();
-    save(); render();
+    save(); applyUI(); render();
   });
   buildMenu();
 
@@ -525,7 +569,7 @@
   const lim = (v, a, b) => Math.max(a, Math.min(b, v));
   /** Hace arrastrable `el` por `handle`; la posición se guarda en cfg[key] ({x,y} o null = la de por defecto).
       Devuelve la función que aplica la posición guardada. */
-  function setupDrag(el, handle, key) {
+  function setupDrag(el, handle, key, opts = {}) {
     const apply = () => {
       const pos = cfg[key];
       if (!pos) { el.style.left = el.style.top = el.style.right = el.style.bottom = el.style.transform = ''; return; }
@@ -536,24 +580,67 @@
     let drag = null;
     handle.addEventListener('pointerdown', e => {
       if (e.button) return;
-      if (!cfg[key]) { const r = el.getBoundingClientRect(); cfg[key] = { x: r.left, y: r.top }; apply(); }
-      drag = { dx: e.clientX - cfg[key].x, dy: e.clientY - cfg[key].y };
-      handle.classList.add('drag'); handle.setPointerCapture(e.pointerId);
+      drag = { x0: e.clientX, y0: e.clientY, dx: 0, dy: 0, moved: false };
+      handle.classList.add('drag');
+      try { handle.setPointerCapture(e.pointerId); } catch {}
     });
     handle.addEventListener('pointermove', e => {
       if (!drag) return;
+      if (!drag.moved) {                                         // hasta mover ~6 px es un toque, no un arrastre
+        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+        drag.moved = true;
+        const r = el.getBoundingClientRect();
+        if (!cfg[key]) cfg[key] = { x: r.left, y: r.top };
+        drag.dx = drag.x0 - cfg[key].x; drag.dy = drag.y0 - cfg[key].y;
+      }
       cfg[key] = { x: e.clientX - drag.dx, y: e.clientY - drag.dy };
       apply();
     });
-    const end = () => { if (!drag) return; drag = null; handle.classList.remove('drag'); save(); };
+    const end = () => {
+      if (!drag) return;
+      const d = drag; drag = null; handle.classList.remove('drag');
+      if (d.moved) save(); else if (opts.tap) opts.tap();
+    };
     handle.addEventListener('pointerup', end);
-    handle.addEventListener('pointercancel', end);
-    handle.addEventListener('dblclick', () => { cfg[key] = null; save(); apply(); });
+    handle.addEventListener('pointercancel', () => { drag = null; handle.classList.remove('drag'); });
+    if (opts.reset !== false) handle.addEventListener('dblclick', () => { cfg[key] = null; save(); apply(); });
     return apply;
   }
-  const applyPos = setupDrag(panel, handle, 'pos');
+  const applyPos = setupDrag(panel, handle, 'pos', { tap: () => { cfg.collapsed = !cfg.collapsed; save(); render(); } });
   const applyMiniPos = setupDrag(mini, miniHandle, 'miniPos');
-  addEventListener('resize', () => { applyPos(); applyMiniPos(); });
+  const applyBtnPos = setupDrag(btn, btn, 'btnPos', { tap: () => menu.classList.toggle('open'), reset: false });
+
+  /* ---------- MÓVIL: detección y escala de la interfaz ---------- */
+  const mq = q => (window.matchMedia ? matchMedia(q) : { matches: false });
+  const mqCoarse = mq('(pointer: coarse)'), mqNoHover = mq('(hover: none)');
+  const COMPACT_SHOW = ['level', 'time', 'dps'];
+  const compactHidden = () => Object.fromEntries(STATS.filter(s => !COMPACT_SHOW.includes(s.k)).map(s => [s.k, 1]));
+  /** Lo que cambia "Recomendado" en el móvil: panel compacto, sin FPS ni zoom, minimapa pequeño. */
+  const recoPreset = () => mobileMode ? { fps: false, fov: false, miniSize: 'small', hidden: compactHidden() } : {};
+
+  function detectMobile() {
+    if (cfg.uiMode === 'mobile') return true;
+    if (cfg.uiMode === 'desktop') return false;
+    const touch = mqCoarse.matches || (mqNoHover.matches && (navigator.maxTouchPoints || 0) > 0);
+    return touch && Math.min(innerWidth, innerHeight) < 900;       // móvil o tableta pequeña; un portátil táctil sigue en escritorio
+  }
+  function applyUI() {
+    mobileMode = detectMobile();
+    const side = Math.min(innerWidth, innerHeight);
+    const base = mobileMode ? lim(side / 520, 0.72, 1.15) : 1;     // en un móvil apaisado (~360-430 px de alto) sale ~0,75
+    UI = lim(base * (+cfg.uiScale || 1), 0.5, 2);
+    UO = lim(UI, 0.8, 1.4);
+    host.style.setProperty('--s', UI.toFixed(3));
+    host.classList.toggle('m', mobileMode);
+    if (mobileMode && cfg.uiMode === 'auto' && !cfg.mobInit) { cfg.mobInit = true; Object.assign(cfg, recoPreset()); save(); }
+    const info = root.getElementById('uiinfo');
+    if (info) info.textContent = `${mobileMode ? 'Móvil' : 'Escritorio'} · interfaz al ${Math.round(UI * 100)} %`;
+    applyPos(); applyMiniPos(); applyBtnPos();
+  }
+  addEventListener('resize', applyUI);
+  addEventListener('orientationchange', () => setTimeout(applyUI, 250));
+  for (const q of [mqCoarse, mqNoHover]) { if (q.addEventListener) q.addEventListener('change', applyUI); }
+  applyUI();
 
   /* ---------- RENDER ---------- */
   let player = null, lastScan = 0, frames = 0, fps = 0, t0 = performance.now();
@@ -575,6 +662,7 @@
 
     for (const i of menu.querySelectorAll('[data-k]')) {            // sincroniza controles (p. ej. tras F8 o Recomendado)
       const k = i.dataset.k;
+      if (i.type === 'range') { const v = k === 'zoom' ? Z : cfg[k]; if (root.activeElement !== i && Math.abs(i.value - v) > 0.001) i.value = v; continue; }
       if (i.tagName === 'SELECT') { if (i.value !== cfg[k]) i.value = cfg[k]; continue; }
       const on = k.startsWith('s:') ? !cfg.hidden[k.slice(2)] : cfg[k];
       if (i.checked !== !!on) i.checked = !!on;
@@ -582,7 +670,7 @@
 
     let h = '';
     if (cfg.fps) h += row('FPS', fps, fps >= 55 ? 'good' : fps >= 30 ? 'warn' : 'bad');
-    if (cfg.fov) h += row('Campo de visión', `${Z.toFixed(2)}×`);
+    if (cfg.fov) h += row('Campo de visión', `${Z.toFixed(2)}×${Cam && Cam._psHooked ? '' : ' ⚠'}`, Cam && Cam._psHooked ? '' : 'bad');
     if (p) {
       if (cfg.hp) {
         const f = p.maxHp > 0 ? lim(p.hp / p.maxHp, 0, 1) : 0;
@@ -600,6 +688,9 @@
     } else if (cfg.panel) h += '<div class="sep"></div><div class="empty">Esperando partida…</div>';
 
     panel.style.display = cfg.panel && h ? 'block' : 'none';
+    panel.classList.toggle('collapsed', !!cfg.collapsed);
+    body.style.display = cfg.collapsed ? 'none' : '';
+    handle.querySelector('small').textContent = cfg.collapsed ? '▸' : '⠿';
     body.innerHTML = h;
     applyPos();
     applyMiniPos();
@@ -685,7 +776,16 @@
     for (const r of [G.Interact, G.World, G.Rift, G.Events]) visit(r, '', 0);
     pois = out.slice(0, 80);
   }
-  window.__PS = { pois: () => pois, player: () => player, hazards: () => hazards };   // para depurar desde la consola
+  /* ¿Corre el script en el mismo "mundo" JS que la página? locales.js y boot.js definen PS_LOCALES / PS_PAGES en window:
+     si no se ven, el gestor de scripts ha aislado el script (p. ej. la CSP del juego bloquea la inyección) y los enganches
+     al juego (cámara, jugador, enemigos) no pueden funcionar, aunque el panel y el menú sí se vean. */
+  const pageWorld = () => window.PS_LOCALES !== undefined || window.PS_PAGES !== undefined;
+  function hookStatus() {
+    return { world: pageWorld() ? 'página' : (document.readyState === 'loading' ? 'cargando' : 'AISLADO'),
+             camera: !!(Cam && Cam._psHooked), G: !!gl(), jugador: isPlayer(player), instancias: instances.length,
+             zoom: Z, ultimoResize: last, version: '0.17', navegador: navigator.userAgent };
+  }
+  window.__PS = { pois: () => pois, player: () => player, hazards: () => hazards, cam: () => Cam, g: () => gl(), status: hookStatus };   // para depurar desde la consola
 
   /* ---------- TICK (4 veces por segundo): métricas, avisos, título, auto-cambio ---------- */
   let lastP = null, samples = [], seenIds = new Set(), seenPoi = new Set(), lastAuto = -1e9, lastAutoPause = -1e9, baseTitle = '';
@@ -754,7 +854,7 @@
       .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0] || null);
 
   function badge(x, y, ang, col, glyph) {
-    octx.save(); octx.translate(x, y); octx.globalAlpha = 0.92;
+    octx.save(); octx.translate(x, y); octx.scale(UO, UO); octx.globalAlpha = 0.92;
     octx.fillStyle = col; octx.strokeStyle = 'rgba(0,0,0,.7)'; octx.lineWidth = 2;
     octx.beginPath(); octx.arc(0, 0, 11, 0, 6.2832); octx.fill(); octx.stroke();
     octx.rotate(ang); octx.beginPath(); octx.moveTo(20, 0); octx.lineTo(11, -6.5); octx.lineTo(11, 6.5); octx.closePath(); octx.fill(); octx.stroke();
@@ -778,13 +878,13 @@
     mini.style.display = show ? 'block' : 'none';
     if (!show) return;
     const S = MINI_SIZES[cfg.miniSize] || 160, R = MINI_RANGE[cfg.miniRange] || 1200;
-    const dpr = window.devicePixelRatio || 1, key = S + '@' + dpr;
+    const dpr = window.devicePixelRatio || 1, key = S + '@' + dpr + '@' + UI.toFixed(3);
     if (key !== miniKey) {
       miniKey = key;
-      mcv.width = mcv.height = Math.round(S * dpr);
-      mcv.style.width = mcv.style.height = S + 'px';
+      mcv.width = mcv.height = Math.round(S * UI * dpr);
+      mcv.style.width = mcv.style.height = (S * UI) + 'px';
     }
-    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mctx.setTransform(dpr * UI, 0, 0, dpr * UI, 0, 0);                 // se dibuja en unidades base y se escala
     mctx.clearRect(0, 0, S, S);
     const c = S / 2, rr = c - 8, k = rr / R, now = performance.now();
 
@@ -877,7 +977,7 @@
     // Enemigos: anillos de eficacia / apoyos / vida de jefes; flechas a los fuera de pantalla
     const grp = p.activeGroup ? p.activeGroup() : [];
     const m0 = r.left + 6, m1 = r.right - 6, n0 = r.top + 6, n1 = r.bottom - 6;
-    const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2, edge = 24;
+    const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2, edge = 24 * UO;
     const arrowTo = (wx, wy, col, glyph) => {
       const dx = X(wx) - cx, dy = Y(wy) - cy;
       const t = Math.min((cx - r.left - edge) / Math.abs(dx || 1e-6), (cy - r.top - edge) / Math.abs(dy || 1e-6));
@@ -910,7 +1010,7 @@
       }
       if (cfg.bossHp && e.boss) {
         const txt = `${fmt(Math.ceil(e.hp))} / ${fmt(e.maxHp)} · ${Math.round(100 * e.hp / e.maxHp)}%`;
-        octx.font = '700 12px sans-serif'; octx.textAlign = 'center'; octx.textBaseline = 'bottom';
+        octx.font = `700 ${12 * UO}px sans-serif`; octx.textAlign = 'center'; octx.textBaseline = 'bottom';
         octx.lineWidth = 3; octx.strokeStyle = 'rgba(0,0,0,.85)'; octx.fillStyle = '#fff';
         const ty = y - ((e.bodyH || 30) + 16) * k;
         octx.strokeText(txt, x, ty); octx.fillText(txt, x, ty);
@@ -933,129 +1033,28 @@
   }
   requestAnimationFrame(frame);
 
-  /* ---------- BUSCADOR EN LA COLECCIÓN (pantalla #scr-dex de menu.js) ----------
-     Filtra las tarjetas de la generación abierta, indica en qué otras generaciones hay resultados
-     (botones) y salta sola a una con resultados. Nombre y tipos solo de los que ya tienes; el nº, de todos. */
-  (() => {
-    const norm = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-    const FKEYS = ['all', 'own', 'miss', 'shiny', '5', '4', '3', '2', '1'];    // mismo orden que los chips del juego
-    let index = null, byDex = null, input = null, hits = null, q = '', tokens = [];
-
-    function getIndex() {
-      const G = gl(); if (!G || !G.DEX) return null;
-      if (index && index.length === G.DEX.length) return index;
-      index = G.DEX.map(p => {
-        let tn = ''; try { tn = String(G.UI.typeChips(p.types)).replace(/<[^>]*>/g, ' '); } catch {}
-        return { p, name: norm(p.name), types: norm(tn + ' ' + (p.types || []).join(' ')), no: String(p.dex).padStart(3, '0') };
-      });
-      byDex = new Map(index.map(it => [it.p.dex, it]));
-      return index;
+  /* Estado del enganche en el menú y avisos de una sola vez si algo no engancha. */
+  let warned = false, loadedAt = 0;
+  addEventListener('load', () => { loadedAt = performance.now(); });
+  function checkHooks() {
+    const st = hookStatus(), el = root.getElementById('hookinfo');
+    const ok = st.world === 'página' && st.camera;
+    if (el) {
+      el.style.color = ok ? '' : '#ff8a8a';
+      el.textContent = ok
+        ? `Enganche con el juego: cámara ✓ · ${st.jugador ? 'jugador ✓' : 'jugador (se detecta al empezar una partida)'}`
+        : st.world === 'AISLADO'
+          ? '⚠ Script aislado de la página: el zoom y las estadísticas no pueden funcionar (ver el README, «El zoom no hace nada»).'
+          : st.world === 'cargando' ? 'Esperando a que cargue el juego…'
+          : '⚠ La cámara del juego no se ha enganchado: recarga con Ctrl + F5.';
     }
-    const nativeFilter = () => {
-      const i = [...document.querySelectorAll('#dex-filters .chip')].findIndex(c => c.classList.contains('on'));
-      return FKEYS[i] || 'all';
-    };
-    const passNative = (p, f, sv) => {
-      const own = !!sv.owned[p.dex], sh = !!(sv.shiny && sv.shiny[p.dex]);
-      return !((f === 'own' && !own) || (f === 'miss' && own) || (f === 'shiny' && !sh) || (/^\d$/.test(f) && p.rarity !== +f));
-    };
-    function matches(it, owned) {
-      if (!q) return true;
-      if (/^\d+$/.test(q)) return it.no.includes(q);
-      if (!owned) return false;
-      const hay = it.name + ' ' + it.types;
-      return tokens.every(t => hay.includes(t));
+    if (!warned && loadedAt && performance.now() - loadedAt > 4000 && !ok) {
+      warned = true;
+      toast(st.world === 'AISLADO' ? '⚠ Zoom y estadísticas no disponibles: el script está aislado de la página (⚙ → Extras)'
+                                   : '⚠ No se ha podido enganchar la cámara del juego (⚙ → Extras)', 7000);
     }
-    const curGen = () => [...document.querySelectorAll('#dex-gens .gen-tab')].findIndex(b => b.classList.contains('on')) + 1;
-
-    function applyFilter() {
-      const G = gl(), grid = document.getElementById('dex-grid');
-      if (!G?.DB?.save || !grid || !getIndex()) return;
-      const sv = G.DB.save;
-      for (const cell of grid.children) {
-        const no = cell.querySelector('.no'); if (!no) continue;
-        const it = byDex.get(parseInt(no.textContent, 10)); if (!it) continue;
-        cell.style.display = matches(it, !!sv.owned[it.p.dex]) ? '' : 'none';
-      }
-    }
-
-    function counts() {
-      const G = gl(), sv = G?.DB?.save, out = {};
-      if (!sv || !getIndex() || !q) return out;
-      const f = nativeFilter();
-      for (const it of index) if (passNative(it.p, f, sv) && matches(it, !!sv.owned[it.p.dex])) out[it.p.gen] = (out[it.p.gen] || 0) + 1;
-      return out;
-    }
-
-    function updateHits() {
-      const G = gl(); hits.textContent = '';
-      if (!q) return;
-      const c = counts(), gens = Object.keys(c).map(Number);
-      if (!gens.length) { hits.textContent = 'Sin resultados' + (/^\d+$/.test(q) ? '' : ' (el nombre solo se busca entre los que ya tienes)'); hits.style.opacity = .7; return; }
-      hits.style.opacity = 1;
-      const cur = curGen(), names = G?.MenuUI?.GEN_NAMES || [];
-      for (const g of gens) {
-        const b = document.createElement('button');
-        b.className = 'chip' + (g === cur ? ' on' : '');
-        b.textContent = `${names[g - 1] || 'Gen ' + g} · ${c[g]}`;
-        b.onclick = () => gotoGen(g);
-        hits.appendChild(b);
-      }
-    }
-    function gotoGen(g) {
-      const tab = document.querySelectorAll('#dex-gens .gen-tab')[g - 1];
-      if (tab && g !== curGen()) tab.click();
-    }
-    function refresh(auto) {
-      updateHits(); applyFilter();
-      if (auto && q) {
-        const c = counts(), cur = curGen();
-        if (!c[cur]) { const first = Object.keys(c).map(Number).sort((a, b) => a - b)[0]; if (first) gotoGen(first); }
-      }
-    }
-    function pickFirst() {
-      const G = gl(), sv = G?.DB?.save; if (!sv || !q || !getIndex()) return;
-      const f = nativeFilter();
-      const it = index.find(x => passNative(x.p, f, sv) && matches(x, !!sv.owned[x.p.dex]));
-      if (!it) return;
-      gotoGen(it.p.gen);
-      const cell = [...document.getElementById('dex-grid').children].find(c => c.querySelector('.no')?.textContent === it.no);
-      if (cell) cell.click();                                   // abre su ficha, como al pulsar la tarjeta
-    }
-
-    function install(fb, grid) {
-      const box = document.createElement('div');
-      box.style.cssText = 'flex:1 0 100%;width:100%;margin:6px 0';
-      box.innerHTML = '<input class="field" type="search" autocomplete="off" spellcheck="false" ' +
-        'placeholder="Buscar por nombre, tipo o nº…  ( / )" style="width:100%;box-sizing:border-box">' +
-        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:13px"></div>';
-      input = box.firstChild; hits = box.lastChild;
-      fb.insertAdjacentElement('afterend', box);
-      input.addEventListener('input', () => { q = norm(input.value); tokens = q.split(/\s+/).filter(Boolean); refresh(true); });
-      for (const ev of ['keydown', 'keyup', 'keypress']) input.addEventListener(ev, e => {
-        e.stopPropagation();                                    // que las teclas no lleguen a los atajos del juego
-        if (ev !== 'keydown') return;
-        if (e.key === 'Enter') { e.preventDefault(); pickFirst(); }
-        if (e.key === 'Escape') { input.value = ''; q = ''; tokens = []; refresh(false); input.blur(); }
-      });
-      // Cada vez que menu.js redibuja la rejilla (cambio de generación o filtro), se reaplica la búsqueda.
-      new MutationObserver(() => { applyFilter(); updateHits(); }).observe(grid, { childList: true });
-    }
-
-    const wait = setInterval(() => {
-      const fb = document.getElementById('dex-filters'), grid = document.getElementById('dex-grid');
-      if (!fb || !grid || input) return;
-      install(fb, grid); clearInterval(wait);
-    }, 300);
-
-    addEventListener('keydown', e => {                          // "/" enfoca el buscador desde la colección
-      if (e.key !== '/' || !input || e.ctrlKey || e.metaKey || e.altKey) return;
-      const a = document.activeElement;
-      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
-      let open = false; try { open = !!gl()?.UI?.isOpen('scr-dex'); } catch {}
-      if (open) { e.preventDefault(); input.focus(); input.select(); }
-    }, true);
-  })();
+  }
+  setInterval(checkHooks, 1000);
 
   setInterval(render, 250);
   render();
