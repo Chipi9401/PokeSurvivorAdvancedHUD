@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.19
+// @version      0.20
 // @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Ventanas de estadísticas totalmente configurables (agrupa los datos como quieras), minimapa de aliados y gráfica de DPS, todas independientes, arrastrables y anclables; interfaz adaptada a móvil.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
@@ -185,13 +185,13 @@
   addEventListener('keydown', e => {
     if (e.key === 'Home') { Z = 1; applyZoom(); }   // Inicio = reset
     if ((e.code === 'NumpadMultiply' || e.code === 'NumpadDivide') && cfg.shiftWheel && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      const a = document.activeElement;             // Núm. * = ataque siguiente, Núm. / = anterior
+      const a = document.activeElement;              // Núm. * = ataque siguiente, Núm. / = anterior
       if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
       e.preventDefault();
       if (!e.repeat && isPlayer(player) && inRun(player) && !player.dead && player.cycle) player.cycle(e.code === 'NumpadMultiply' ? 1 : -1);
     }
     if ((e.code === 'NumpadAdd' || e.code === 'NumpadSubtract') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      const a = document.activeElement;             // no al escribir en un campo de texto
+      const a = document.activeElement;              // no al escribir en un campo de texto
       if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
       e.preventDefault();
       Z = clamp(Z * (e.code === 'NumpadSubtract' ? 1.1 : 1 / 1.1));   // − = ver más, + = ver menos (igual que la rueda)
@@ -583,7 +583,10 @@
         <div class="hint">Rueda o Núm. + / − = zoom · Inicio = reset zoom · Mayús + rueda o Núm. * y / = cambiar de ataque</div>
       </div>
 
-      <div class="foot"><div class="acts"><button class="rec" data-a="reco">★ Recomendado</button><button data-a="reset">Reset</button></div></div>`;
+      <div class="foot">
+        <button class="rec" data-a="copy" style="border-color:#46d37a;color:#46d37a;background:rgba(70,211,122,.14);margin-bottom:8px">Copiar Build al portapapeles</button>
+        <div class="acts" style="margin-top:0"><button class="rec" data-a="reco">★ Recomendado</button><button data-a="reset">Reset</button></div>
+      </div>`;
     buildWinPane();
     setTab(cfg.tab);
   }
@@ -676,6 +679,72 @@
     if (a === 'reset' || a === 'reco') buildWinPane();
     if (a === 'export') return exportSave();
     if (a === 'import') return $('imp').click();
+
+    if (a === 'copy') {
+      const p = currentPlayer();
+      if (!p) { toast('No hay partida activa para copiar'); return; }
+      
+      const g = gl();
+
+      // 1. Nombre del Pokémon
+      let charName = null;
+      if (p.mon) charName = p.mon.name || p.mon.species;
+      if (!charName && p.dex) charName = (g?.DEX?.[p.dex]?.name) || (g?.Pokemon?.BY_ID?.[p.dex]?.name) || p.dex;
+      if (!charName) charName = p.name || 'Pokémon';
+      if (typeof charName === 'string') charName = charName.charAt(0).toUpperCase() + charName.slice(1);
+
+      // 2. Todos los ataques activos
+      let allMoves = [];
+      if (p.slots && p.slots.length > 0) {
+        p.slots.forEach(slot => {
+          if (slot && slot.length > 0) {
+            const m = slot[0];
+            const mId = m.id || m;
+            const lvl = m.lvl || 1;
+            const name = (g?.Moves?.BY_ID?.[mId]?.name) || (g?.Moves?.BY?.[mId]?.name) || mId;
+            allMoves.push(`${name} (Nv. ${lvl})`);
+          }
+        });
+      }
+      const attacksText = allMoves.length > 0 ? allMoves.join(', ') : 'Ninguno';
+
+      // 3. Objeto principal
+      const itemName = p.item ? ((g?.Items?.BY_ID?.[p.item]?.name) || (g?.Items?.BY?.[p.item]?.name) || p.item) : 'Ninguno';
+
+      // 4. Mejoras / Pasivas
+      let mejorasArr = [];
+      const passives = p.passives || p.upgrades || p.skills || (p.inventory ? p.inventory.passives : null) || [];
+      
+      if (Array.isArray(passives) && passives.length > 0) {
+        passives.forEach(upg => {
+          const uId = upg.id || upg;
+          const lvl = upg.lvl || upg.level || 1;
+          const name = (g?.Items?.BY_ID?.[uId]?.name) || (g?.Items?.BY?.[uId]?.name) || 
+                       (g?.Passives?.BY_ID?.[uId]?.name) || (g?.Passives?.BY?.[uId]?.name) || uId;
+          if (name && name !== 'undefined') mejorasArr.push(`${name} (Nv. ${lvl})`);
+        });
+      } else if (typeof passives === 'object' && Object.keys(passives).length > 0) {
+        for (const [k, v] of Object.entries(passives)) {
+          const name = (g?.Items?.BY_ID?.[k]?.name) || (g?.Items?.BY?.[k]?.name) || k;
+          const lvl = typeof v === 'number' ? v : (v.lvl || 1);
+          if (name && name !== 'undefined') mejorasArr.push(`${name} (Nv. ${lvl})`);
+        }
+      }
+      
+      if (p.bonds > 0) mejorasArr.push(`Vínculos: ${p.bonds}`);
+      const mejorasText = mejorasArr.length > 0 ? mejorasArr.join(', ') : 'Ninguna';
+
+      const time = fmtT(p._psTime || 0);
+      const dps = Math.round(metrics.dps);
+
+      const text = `Mi Build en PokéSurvivor\nPkmn: ${charName} (Nv. ${p.level || 1})\nAtaques: ${attacksText}\nObjeto: ${itemName}\nMejoras: ${mejorasText}\nTiempo: ${time}\nDerrotas: ${p.kills || 0}\nDPS: ${dps.toLocaleString('es-ES')}`;
+
+      navigator.clipboard.writeText(text)
+        .then(() => toast('Build copiada al portapapeles'))
+        .catch(() => toast('Error al copiar (permisos del navegador)'));
+      return;
+    }
+
     save(); applyUI(); render();
   });
   buildMenu();
@@ -685,7 +754,7 @@
   /** Hace arrastrable `el` por `handle`; la posición se guarda en cfg[key] ({x,y} o null = anclada a su sitio por defecto).
       Devuelve la función que aplica la posición guardada. */
   function setupDrag(el, handle, key, opts = {}) {
-    const H = opts.holder || (() => cfg);                         // objeto donde se guarda la posición (por defecto cfg)
+    const H = opts.holder || (() => cfg);                          // objeto donde se guarda la posición (por defecto cfg)
     const apply = opts.apply || (() => {
       const pos = (H() || {})[key];
       if (!pos) { el.style.left = el.style.top = el.style.right = el.style.bottom = el.style.transform = ''; return; }
@@ -861,7 +930,7 @@
     dpsFrame(p);
     updatePins();
 
-    for (const i of menu.querySelectorAll('[data-k]')) {            // sincroniza controles (p. ej. tras F8 o Recomendado)
+    for (const i of menu.querySelectorAll('[data-k]')) {             // sincroniza controles (p. ej. tras F8 o Recomendado)
       const k = i.dataset.k;
       if (i.type === 'range') { const v = k === 'zoom' ? Z : cfg[k]; if (root.activeElement !== i && Math.abs(i.value - v) > 0.001) i.value = v; continue; }
       if (i.tagName === 'SELECT') { if (i.value !== cfg[k]) i.value = cfg[k]; continue; }
@@ -983,7 +1052,7 @@
   function hookStatus() {
     return { world: pageWorld() ? 'página' : (document.readyState === 'loading' ? 'cargando' : 'AISLADO'),
              camera: !!(Cam && Cam._psHooked), G: !!gl(), jugador: isPlayer(player), instancias: instances.length,
-             zoom: Z, ultimoResize: last, version: '0.19', navegador: navigator.userAgent };
+             zoom: Z, ultimoResize: last, version: '0.20', navegador: navigator.userAgent };
   }
   window.__PS = { pois: () => pois, player: () => player, hazards: () => hazards, cam: () => Cam, g: () => gl(), status: hookStatus, dps: () => dpsHist };   // para depurar desde la consola
 
@@ -1048,7 +1117,7 @@
   const dctx = dcv.getContext('2d');
   const DPS_SIZES = { small: [200, 90], medium: [260, 120], large: [360, 170] };
   const dpsNum = v => v >= 10000 ? `${Math.round(v / 1000)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
-  const niceMax = v => {                                              // techo "redondo" para el eje Y
+  const niceMax = v => {                                                // techo "redondo" para el eje Y
     if (!(v > 0)) return 10;
     const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e;
     return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e;
