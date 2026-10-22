@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéSurvivor – Zoom FOV + Stats
 // @namespace    chipi
-// @version      0.17
-// @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Panel de stats a la derecha, minimapa de aliados e interfaz adaptada a móvil.
+// @version      0.19
+// @description  Rueda del ratón = más/menos campo de visión (personaje centrado). Ventanas de estadísticas totalmente configurables (agrupa los datos como quieras), minimapa de aliados y gráfica de DPS, todas independientes, arrastrables y anclables; interfaz adaptada a móvil.
 // @match        https://pokesurvivor.com/*
 // @match        https://jpter78.github.io/pokesurvivor/*
 // @run-at       document-start
@@ -313,15 +313,45 @@
   ];
   const nonReco = () => Object.fromEntries(STATS.filter(s => !s.reco).map(s => [s.k, 1]));
 
-  /* ---------- CONFIG ---------- */
-  const DEF = { panel: true, fps: true, fov: true, hp: true, xp: true, hpbar: 'big', tab: 'panel', pos: null, hidden: nonReco(),
+  /* ---------- CONFIG ----------
+     Ventanas: las de estadísticas son una lista (cfg.wins) con nombre, datos y posición propios; el minimapa y el DPS
+     guardan su posición en miniPos / dpsPos. Posición null = anclada a su sitio; con valor = flotante donde la hayas soltado. */
+  const DEF = { panel: true, hpbar: 'big', tab: 'panel',
     ring: true, support: true, bossHp: true, haz: true, magnet: false, arrows: true, poi: true,
     pauseBlur: true, shiftWheel: true, alerts: true, title: true, autoMove: false,
     mini: true, miniSize: 'medium', miniRange: 'mid', miniPos: null, spawnCap: true,
-    uiMode: 'auto', uiScale: 1, mobInit: false, btnPos: null, collapsed: false };
+    dps: true, dpsSize: 'medium', dpsRange: '120', dpsPos: null, dpsCollapsed: false,
+    uiMode: 'auto', uiScale: 1, mobInit: false, btnPos: null };
   let cfg;
   try { cfg = { ...DEF, ...JSON.parse(localStorage.getItem('ps_cfg3') || '{}') }; } catch { cfg = { ...DEF }; }
   const save = () => localStorage.setItem('ps_cfg3', JSON.stringify(cfg));
+
+  /* ---------- DATOS QUE SE PUEDEN PONER EN UNA VENTANA ---------- */
+  const SPECIAL = [{ k: 'fps', label: 'FPS' }, { k: 'fov', label: 'Campo de visión (zoom)' },
+                   { k: 'hp', label: 'Barra de vida' }, { k: 'xp', label: 'Barra de experiencia' }];
+  const ITEMS = [...SPECIAL, ...STATS];
+  const ITEM_BY = Object.fromEntries(ITEMS.map(i => [i.k, i]));
+  const STATS_BY = Object.fromEntries(STATS.map(s => [s.k, s]));
+  const newId = () => 'w' + Math.random().toString(36).slice(2, 8);
+  const newWin = (name, items) => ({ id: newId(), name, items: items.slice(), pos: null, collapsed: false, open: true });
+  const recoItems = () => ['fps', 'fov', 'hp', 'xp', ...STATS.filter(s => s.reco).map(s => s.k)];
+  const compactItems = () => ['hp', 'xp', 'level', 'time', 'dps'];
+  /** Ventana "Recomendado" (conserva la posición de la primera ventana si ya había alguna). */
+  const recoWins = () => {
+    const old = cfg.wins && cfg.wins[0], w = newWin('Estadísticas', mobileMode ? compactItems() : recoItems());
+    if (old) { w.pos = old.pos; w.collapsed = old.collapsed; }
+    return [w];
+  };
+  /** Migración de la config antigua (un solo panel con fps/fov/hp/xp + hidden) a la lista de ventanas. */
+  function legacyWins(c) {
+    const hid = c.hidden || nonReco(), items = [];
+    for (const k of ['fps', 'fov', 'hp', 'xp']) if (c[k] !== false) items.push(k);
+    for (const s of STATS) if (!hid[s.k]) items.push(s.k);
+    const w = newWin('Estadísticas', items); w.pos = c.pos || null; w.collapsed = !!c.collapsed;
+    return [w];
+  }
+  if (!Array.isArray(cfg.wins)) cfg.wins = legacyWins(cfg);
+  cfg.wins = cfg.wins.filter(w => w && typeof w.id === 'string' && Array.isArray(w.items));
 
   /* ---------- JUGADOR LOCAL ---------- */
   const isPlayer = o => o && typeof o === 'object' && typeof o.hp === 'number' && typeof o.maxHp === 'number' &&
@@ -352,15 +382,18 @@
   <style>
     *{box-sizing:border-box}
     :host{font-family:'Pixelify Sans',ui-monospace,Consolas,monospace;font-size:calc(13 * var(--u));color:#e8eefc}
-    .panel,.menu,.mini{background:rgba(10,20,48,.82);backdrop-filter:blur(calc(6 * var(--u)));border:1px solid rgba(255,255,255,.14);
+    .panel,.menu,.mini,.dpsw{background:rgba(10,20,48,.82);backdrop-filter:blur(calc(6 * var(--u)));border:1px solid rgba(255,255,255,.14);
       border-radius:calc(10 * var(--u));box-shadow:0 calc(6 * var(--u)) calc(20 * var(--u)) rgba(0,0,0,.45)}
-    .panel{position:absolute;right:calc(10 * var(--u));top:50%;transform:translateY(-50%);min-width:calc(190 * var(--u));max-width:calc(260 * var(--u));
+    .panel{position:absolute;min-width:calc(190 * var(--u));max-width:calc(260 * var(--u));
       max-height:80vh;overflow:hidden;padding:calc(8 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u))}
     .title{pointer-events:auto;cursor:grab;touch-action:none;user-select:none;display:flex;align-items:center;gap:calc(6 * var(--u));font-size:calc(11 * var(--u));letter-spacing:.12em;text-transform:uppercase;
       color:#8fb3ff;padding-bottom:calc(6 * var(--u));margin-bottom:calc(6 * var(--u));border-bottom:1px solid rgba(255,255,255,.1)}
     .title.drag{cursor:grabbing}
     .title small{margin-left:auto;opacity:.5;font-size:calc(10 * var(--u));letter-spacing:0}
     .title i{width:calc(7 * var(--u));height:calc(7 * var(--u));border-radius:50%;background:#46d37a;box-shadow:0 0 calc(6 * var(--u)) #46d37a}
+    .title .pin,.title .x{cursor:pointer;opacity:.55;padding:0 calc(2 * var(--u));font-size:calc(11 * var(--u));letter-spacing:0;text-transform:none;line-height:1}
+    .title .pin:hover,.title .x:hover{opacity:1}
+    .title .x{font-size:calc(13 * var(--u))}
     .row{display:flex;justify-content:space-between;gap:calc(14 * var(--u));padding:calc(2 * var(--u)) 0}
     .row span{color:#9fb0d4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .row b{font-weight:600;color:#fff;font-variant-numeric:tabular-nums}
@@ -414,6 +447,10 @@
     .mini{position:absolute;left:calc(10 * var(--u));bottom:calc(10 * var(--u));display:none;overflow:hidden}
     .mini .title{margin:0;padding:calc(5 * var(--u)) calc(8 * var(--u))}
     .mini canvas{position:static;inset:auto;display:block}
+    .dpsw{position:absolute;left:calc(10 * var(--u));top:50%;transform:translateY(-50%);display:none;overflow:hidden}
+    .dpsw .title{margin:0;padding:calc(5 * var(--u)) calc(8 * var(--u))}
+    .dpsw.collapsed .title{border-bottom:0}
+    .dpsw canvas{position:static;inset:auto;display:block}
   
     :host{--u:calc(1px * var(--s, 1))}
     .pane{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
@@ -423,32 +460,45 @@
     /* --- móvil / pantallas táctiles pequeñas --- */
     :host(.m) .btn{width:max(44px,calc(36 * var(--u)));height:max(44px,calc(36 * var(--u)));font-size:calc(20 * var(--u));
       top:max(56px,12%);bottom:auto;right:calc(8 * var(--u) + env(safe-area-inset-right,0px));opacity:.8}
-    :host(.m) .panel{top:max(116px,28%);transform:none;right:calc(8 * var(--u) + env(safe-area-inset-right,0px));
-      min-width:calc(150 * var(--u));max-width:calc(210 * var(--u));max-height:calc(100% - 130px)}
+    :host(.m) .panel{min-width:calc(150 * var(--u));max-width:calc(210 * var(--u));max-height:calc(100% - 130px)}
     :host(.m) .title{min-height:32px}
+    :host(.m) .title .pin,:host(.m) .title .x{padding:calc(6 * var(--u)) calc(6 * var(--u))}
     :host(.m) .mini{left:calc(8 * var(--u) + env(safe-area-inset-left,0px));top:50%;bottom:auto;transform:translateY(-50%)}
+    :host(.m) .dpsw{left:calc(8 * var(--u) + env(safe-area-inset-left,0px));top:auto;bottom:calc(8 * var(--u) + env(safe-area-inset-bottom,0px));transform:none}
     :host(.m) .menu{top:calc(8 * var(--u) + env(safe-area-inset-top,0px));bottom:calc(8 * var(--u) + env(safe-area-inset-bottom,0px));
       right:calc(8 * var(--u) + env(safe-area-inset-right,0px));width:min(calc(300 * var(--u)),72vw);max-height:none}
     :host(.m) .tabs button{min-height:44px}
     :host(.m) label{min-height:40px}
     :host(.m) input[type=checkbox]{width:22px;height:22px}
     :host(.m) .acts button,:host(.m) select{min-height:40px}
+    .title .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(150 * var(--u))}
+    input[type=text]{width:100%;padding:calc(4 * var(--u)) calc(6 * var(--u));border-radius:calc(6 * var(--u));background:#1a2547;color:#e8eefc;border:1px solid rgba(255,255,255,.2);font:inherit}
+    .irow{display:flex;align-items:center;gap:calc(4 * var(--u))}
+    .irow label{flex:1;min-width:0}
+    .mv{flex:none;width:calc(24 * var(--u));padding:calc(2 * var(--u)) 0;border-radius:calc(5 * var(--u));border:1px solid rgba(255,255,255,.2);
+      background:rgba(255,255,255,.08);color:#e8eefc;font:inherit;font-size:calc(11 * var(--u));cursor:pointer}
+    .mv:hover{background:rgba(255,255,255,.2)}
+    .mv:disabled,.acts button:disabled{opacity:.35;cursor:default}
+    .dim{opacity:.6}
+    :host(.m) .mv{min-width:36px;min-height:36px}
 </style>
   <canvas id="ov"></canvas>
   <div class="toast" id="toast"></div>
   <input type="file" id="imp" accept="application/json,.json" style="display:none">
-  <div class="panel" id="panel"><div class="title" id="drag"><i></i>PokéSurvivor HUD<small>⠿</small></div><div id="body"></div></div>
-  <div class="mini" id="mini"><div class="title" id="mdrag"><i></i>Aliados<small>⠿</small></div><canvas id="mcv"></canvas></div>
+  <div id="wins"></div>
+  <div class="mini" id="mini"><div class="title" id="mdrag"><i></i>Aliados<small>⠿</small><span class="pin">📌</span><span class="x" title="Cerrar (se reactiva desde ⚙)">×</span></div><canvas id="mcv"></canvas></div>
+  <div class="dpsw" id="dpsw"><div class="title" id="ddrag"><i></i>DPS<small>⠿</small><span class="pin">📌</span><span class="x" title="Cerrar (se reactiva desde ⚙)">×</span></div><canvas id="dcv"></canvas></div>
   <div class="menu" id="menu"></div>
   <div class="btn" id="btn" title="Opciones del HUD">⚙</div>`;
   document.documentElement.appendChild(host);
 
   const $ = id => root.getElementById(id);
-  const panel = $('panel'), body = $('body'), handle = $('drag'), menu = $('menu'), btn = $('btn');
+  const menu = $('menu'), btn = $('btn'), winsEl = $('wins');
   const mini = $('mini'), miniHandle = $('mdrag'), mcv = $('mcv');
+  const dpsw = $('dpsw'), dpsHandle = $('ddrag'), dcv = $('dcv');
 
   // que el juego no reciba nuestros clics/toques
-  for (const el of [btn, menu, handle, miniHandle])
+  for (const el of [btn, menu, miniHandle, dpsHandle])
     for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click', 'contextmenu'])
       el.addEventListener(ev, e => e.stopPropagation());
 
@@ -466,7 +516,7 @@
     ['autoMove', 'Cambio automático de ataque (solo en solitario)'],
     ['spawnCap', 'Aparición de enemigos acotada (evita partidas vacías con mucho zoom)']];
 
-  const TABS = [['panel', 'Panel'], ['stats', 'Estadísticas'], ['world', 'Mundo'], ['extras', 'Extras']];
+  const TABS = [['panel', 'Panel'], ['wins', 'Ventanas'], ['world', 'Mundo'], ['extras', 'Extras']];
 
   function setTab(t) {
     if (!TABS.some(x => x[0] === t)) t = 'panel';
@@ -483,12 +533,17 @@
         <h4>Zoom (campo de visión)</h4>
         <div class="zrow"><input type="range" data-k="zoom" min="0.7" max="3" step="0.05"></div>
         <div class="acts"><button data-a="zless">Ver menos</button><button data-a="zmore">Ver más</button><button data-a="zreset">1×</button></div>
-        <h4>Qué mostrar</h4>
-        ${chk('panel', 'Panel de estadísticas', cfg.panel)}
-        ${chk('fps', 'FPS', cfg.fps)}
-        ${chk('fov', 'Campo de visión (zoom)', cfg.fov)}
-        ${chk('hp', 'Barra de vida', cfg.hp)}
-        ${chk('xp', 'Barra de experiencia', cfg.xp)}
+        <h4>Ventanas de estadísticas</h4>
+        ${chk('panel', 'Mostrar las ventanas de estadísticas (F8)', cfg.panel)}
+        <div class="hint" style="margin-top:2px">Qué datos lleva cada ventana, cuántas hay y cómo se llaman: pestaña «Ventanas».</div>
+        <h4>Gráfica de DPS</h4>
+        ${chk('dps', 'Mostrar gráfica de DPS', cfg.dps)}
+        <select data-k="dpsSize">
+          <option value="small">Tamaño pequeño</option><option value="medium">Tamaño mediano</option><option value="large">Tamaño grande</option>
+        </select>
+        <select data-k="dpsRange" style="margin-top:6px">
+          <option value="60">Últimos 60 s</option><option value="120">Últimos 2 min</option><option value="300">Últimos 5 min</option><option value="run">Toda la partida</option>
+        </select>
         <h4>Minimapa de aliados</h4>
         ${chk('mini', 'Mostrar minimapa', cfg.mini)}
         <select data-k="miniSize">
@@ -497,14 +552,12 @@
         <select data-k="miniRange" style="margin-top:6px">
           <option value="near">Alcance cercano</option><option value="mid">Alcance medio</option><option value="far">Alcance lejano</option>
         </select>
-        <div class="hint">Arrastra el panel, el minimapa o el botón ⚙ · toca el título del panel para plegarlo · doble clic o toque = posición original · F8 = ocultar panel</div>
+        <h4>Ventanas</h4>
+        <div class="acts" style="margin-top:0"><button data-a="pinall">📌 Anclar todas a su sitio</button></div>
+        <div class="hint">Cada ventana (estadísticas, DPS, minimapa) es independiente: arrástrala por su título para soltarla donde quieras (queda flotante) · 📌 / 📍 la devuelve a su sitio · × la cierra (se reactiva aquí) · toca el título de una ventana de estadísticas o del DPS para plegarla · doble clic = posición original · F8 = ocultar las ventanas de estadísticas · el botón ⚙ también se arrastra</div>
       </div>
 
-      <div class="pane" data-pane="stats">
-        <h4>Estadísticas del jugador</h4>
-        ${STATS.map(s => chk('s:' + s.k, s.label, !cfg.hidden[s.k])).join('')}
-        <div class="acts"><button data-a="all">Todo</button><button data-a="none">Nada</button></div>
-      </div>
+      <div class="pane" data-pane="wins"></div>
 
       <div class="pane" data-pane="world">
         <h4>Barra de vida de enemigos</h4>
@@ -531,55 +584,119 @@
       </div>
 
       <div class="foot"><div class="acts"><button class="rec" data-a="reco">★ Recomendado</button><button data-a="reset">Reset</button></div></div>`;
+    buildWinPane();
     setTab(cfg.tab);
   }
 
+  /* ---------- PESTAÑA «VENTANAS»: crear, nombrar y rellenar ventanas de estadísticas ---------- */
+  let selWin = null;
+  const selWinObj = () => cfg.wins.find(w => w.id === selWin) || cfg.wins[0] || null;
+  function buildWinPane() {
+    const pn = menu.querySelector('[data-pane="wins"]'); if (!pn) return;
+    const w = selWinObj(); selWin = w ? w.id : null;
+    const keep = pn.scrollTop;
+    let h = '<h4>Ventanas de estadísticas</h4>';
+    if (cfg.wins.length) h += `<select data-w="sel">${cfg.wins.map(x => `<option value="${esc(x.id)}"${w && x.id === w.id ? ' selected' : ''}>${esc(x.name || 'Ventana')}</option>`).join('')}</select>`;
+    else h += '<div class="empty">No hay ventanas: crea una.</div>';
+    h += `<div class="acts"><button data-wa="new">＋ Nueva</button><button data-wa="dup"${w ? '' : ' disabled'}>Duplicar</button><button data-wa="del"${w ? '' : ' disabled'}>Eliminar</button></div>`;
+    if (w) {
+      h += `<h4>Nombre</h4><input type="text" data-w="name" maxlength="24" value="${esc(w.name || '')}">
+        <label><input type="checkbox" data-w="open" ${w.open !== false ? 'checked' : ''}>Ventana visible</label>
+        <h4>Datos de la ventana <small>(↑ ↓ ordena)</small></h4>`;
+      w.items.forEach((k, i) => {
+        const it = ITEM_BY[k]; if (!it) return;
+        h += `<div class="irow"><label><input type="checkbox" data-wi="${esc(k)}" checked>${esc(it.label)}</label>
+          <button class="mv" data-wa="up" data-ik="${esc(k)}"${i ? '' : ' disabled'}>↑</button><button class="mv" data-wa="dn" data-ik="${esc(k)}"${i < w.items.length - 1 ? '' : ' disabled'}>↓</button></div>`;
+      });
+      const rest = ITEMS.filter(it => !w.items.includes(it.k));
+      if (rest.length) h += '<h4>Disponibles</h4>' + rest.map(it => `<label class="dim"><input type="checkbox" data-wi="${esc(it.k)}">${esc(it.label)}</label>`).join('');
+      h += '<div class="acts"><button data-wa="all">Todo</button><button data-wa="none">Nada</button><button data-wa="pin">📌 Anclar</button></div>';
+    }
+    pn.innerHTML = h; pn.scrollTop = keep;
+  }
+  function winChange(t) {
+    if (t.dataset.w === 'sel') { selWin = t.value; buildWinPane(); return; }
+    const w = selWinObj(); if (!w) return;
+    if (t.dataset.w === 'name') { w.name = t.value.trim() || 'Ventana'; buildWinPane(); }
+    else if (t.dataset.w === 'open') w.open = t.checked;
+    else if (t.dataset.wi) {
+      const k = t.dataset.wi, i = w.items.indexOf(k);
+      if (t.checked && i < 0) w.items.push(k); else if (!t.checked && i >= 0) w.items.splice(i, 1);
+      buildWinPane();
+    }
+    save(); render();
+  }
+  function winAction(a, k) {
+    const w = selWinObj();
+    if (a === 'new') { const n = newWin(`Ventana ${cfg.wins.length + 1}`, []); cfg.wins.push(n); selWin = n.id; }
+    else if (!w) return;
+    else if (a === 'dup') { const n = newWin(`${w.name} (copia)`.slice(0, 24), w.items); cfg.wins.push(n); selWin = n.id; }
+    else if (a === 'del') { if (!confirm(`¿Eliminar la ventana «${w.name}»?`)) return; cfg.wins = cfg.wins.filter(x => x !== w); selWin = null; }
+    else if (a === 'up' || a === 'dn') {
+      const i = w.items.indexOf(k), j = i + (a === 'up' ? -1 : 1);
+      if (i < 0 || j < 0 || j >= w.items.length) return;
+      [w.items[i], w.items[j]] = [w.items[j], w.items[i]];
+    }
+    else if (a === 'all') w.items = ITEMS.map(it => it.k);
+    else if (a === 'none') w.items = [];
+    else if (a === 'pin') w.pos = null;
+    buildWinPane(); save(); render();
+  }
+  // al escribir el nombre de una ventana, el juego no debe recibir las teclas
+  for (const ev of ['keydown', 'keyup', 'keypress']) menu.addEventListener(ev, e => { if (e.target.type === 'text') e.stopPropagation(); });
+
   menu.addEventListener('change', e => {
+    if (e.target.dataset.w !== undefined || e.target.dataset.wi !== undefined) return winChange(e.target);
     const k = e.target.dataset.k; if (!k) return;
     if (e.target.type === 'range') { save(); return; }               // los deslizadores se aplican en 'input'
-    if (k.startsWith('s:')) { if (e.target.checked) delete cfg.hidden[k.slice(2)]; else cfg.hidden[k.slice(2)] = 1; }
-    else cfg[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    cfg[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
     if (k === 'uiMode') applyUI();
     save(); render();
   });
   menu.addEventListener('input', e => {
-    const t = e.target; if (t.type !== 'range') return;
+    const t = e.target;
+    if (t.dataset.w === 'name') { const w = selWinObj(); if (w) { w.name = t.value; save(); render(); } return; }
+    if (t.type !== 'range') return;
     if (t.dataset.k === 'zoom') { Z = clamp(+t.value); applyZoom(); }
     else if (t.dataset.k === 'uiScale') { cfg.uiScale = +t.value; applyUI(); }
   });
   menu.addEventListener('click', e => {
     const tab = e.target.dataset.tab;
     if (tab) { setTab(tab); return; }
+    const wa = e.target.dataset.wa;
+    if (wa) { winAction(wa, e.target.dataset.ik); return; }
     const a = e.target.dataset.a; if (!a) return;
     if (a === 'zmore' || a === 'zless' || a === 'zreset') {
       Z = a === 'zreset' ? 1 : clamp(Z * (a === 'zmore' ? 1.1 : 1 / 1.1)); applyZoom(); render(); return;
     }
-    if (a === 'all') cfg.hidden = {};
-    if (a === 'none') cfg.hidden = Object.fromEntries(STATS.map(s => [s.k, 1]));
-    if (a === 'reset') cfg = { ...DEF, hidden: nonReco(), pos: null, tab: cfg.tab, mobInit: true };
-    if (a === 'reco') cfg = { ...DEF, hidden: nonReco(), pos: cfg.pos, miniPos: cfg.miniPos, btnPos: cfg.btnPos, uiMode: cfg.uiMode, uiScale: cfg.uiScale,
-      collapsed: cfg.collapsed, tab: cfg.tab, mobInit: true, ...recoPreset() };
+    if (a === 'pinall') { for (const w of cfg.wins) w.pos = null; cfg.miniPos = null; cfg.dpsPos = null; }
+    if (a === 'reset') cfg = { ...DEF, tab: cfg.tab, mobInit: true, wins: recoWins().map(w => ({ ...w, pos: null, collapsed: false })) };
+    if (a === 'reco') cfg = { ...DEF, miniPos: cfg.miniPos, dpsPos: cfg.dpsPos, btnPos: cfg.btnPos, uiMode: cfg.uiMode, uiScale: cfg.uiScale,
+      dpsCollapsed: cfg.dpsCollapsed, tab: cfg.tab, mobInit: true, wins: recoWins(), ...recoPreset() };
+    if (a === 'reset' || a === 'reco') buildWinPane();
     if (a === 'export') return exportSave();
     if (a === 'import') return $('imp').click();
     save(); applyUI(); render();
   });
   buildMenu();
 
-  /* ---------- ARRASTRAR PANEL Y MINIMAPA ---------- */
+  /* ---------- VENTANAS: ARRASTRAR, ANCLAR Y CERRAR ---------- */
   const lim = (v, a, b) => Math.max(a, Math.min(b, v));
-  /** Hace arrastrable `el` por `handle`; la posición se guarda en cfg[key] ({x,y} o null = la de por defecto).
+  /** Hace arrastrable `el` por `handle`; la posición se guarda en cfg[key] ({x,y} o null = anclada a su sitio por defecto).
       Devuelve la función que aplica la posición guardada. */
   function setupDrag(el, handle, key, opts = {}) {
-    const apply = () => {
-      const pos = cfg[key];
+    const H = opts.holder || (() => cfg);                         // objeto donde se guarda la posición (por defecto cfg)
+    const apply = opts.apply || (() => {
+      const pos = (H() || {})[key];
       if (!pos) { el.style.left = el.style.top = el.style.right = el.style.bottom = el.style.transform = ''; return; }
       const x = lim(pos.x, 0, Math.max(0, innerWidth - el.offsetWidth));
       const y = lim(pos.y, 0, Math.max(0, innerHeight - el.offsetHeight));
       Object.assign(el.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto', transform: 'none' });
-    };
+    });
     let drag = null;
     handle.addEventListener('pointerdown', e => {
       if (e.button) return;
+      if (e.target.closest && e.target.closest('.pin,.x')) return;   // los botones de anclar / cerrar no arrastran
       drag = { x0: e.clientX, y0: e.clientY, dx: 0, dy: 0, moved: false };
       handle.classList.add('drag');
       try { handle.setPointerCapture(e.pointerId); } catch {}
@@ -590,33 +707,100 @@
         if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
         drag.moved = true;
         const r = el.getBoundingClientRect();
-        if (!cfg[key]) cfg[key] = { x: r.left, y: r.top };
-        drag.dx = drag.x0 - cfg[key].x; drag.dy = drag.y0 - cfg[key].y;
+        const o = H(); if (!o) { drag = null; return; }
+        if (!o[key]) o[key] = { x: r.left, y: r.top };
+        drag.dx = drag.x0 - o[key].x; drag.dy = drag.y0 - o[key].y;
       }
-      cfg[key] = { x: e.clientX - drag.dx, y: e.clientY - drag.dy };
+      const o2 = H(); if (!o2) return;
+      o2[key] = { x: e.clientX - drag.dx, y: e.clientY - drag.dy };
       apply();
     });
     const end = () => {
       if (!drag) return;
       const d = drag; drag = null; handle.classList.remove('drag');
-      if (d.moved) save(); else if (opts.tap) opts.tap();
+      if (d.moved) { save(); render(); } else if (opts.tap) opts.tap();
     };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', () => { drag = null; handle.classList.remove('drag'); });
-    if (opts.reset !== false) handle.addEventListener('dblclick', () => { cfg[key] = null; save(); apply(); });
+    if (opts.reset !== false) handle.addEventListener('dblclick', () => { const o = H(); if (o) o[key] = null; save(); apply(); render(); });
     return apply;
   }
-  const applyPos = setupDrag(panel, handle, 'pos', { tap: () => { cfg.collapsed = !cfg.collapsed; save(); render(); } });
+  /* ---------- VENTANAS DE ESTADÍSTICAS ----------
+     Cada una de cfg.wins es un elemento propio. Las ancladas (pos null) se apilan en el lado derecho, centradas;
+     las flotantes van donde se soltaron. */
+  const winEls = new Map();
+  const winFind = id => cfg.wins.find(w => w.id === id);
+  function layoutWins() {
+    const stack = [], gap = 8 * UI;
+    for (const w of cfg.wins) {
+      const o = winEls.get(w.id); if (!o || o.el.style.display === 'none') continue;
+      if (w.pos) {
+        const x = lim(w.pos.x, 0, Math.max(0, innerWidth - o.el.offsetWidth));
+        const y = lim(w.pos.y, 0, Math.max(0, innerHeight - o.el.offsetHeight));
+        Object.assign(o.el.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto' });
+      } else stack.push(o.el);
+    }
+    if (!stack.length) return;
+    const total = stack.reduce((a, e) => a + e.offsetHeight, 0) + gap * (stack.length - 1);
+    let y = mobileMode ? Math.max(116, innerHeight * 0.28) : Math.max(8, (innerHeight - total) / 2);
+    const right = mobileMode ? 'calc(8 * var(--u) + env(safe-area-inset-right,0px))' : 'calc(10 * var(--u))';
+    for (const e of stack) {
+      Object.assign(e.style, { left: 'auto', right, top: y + 'px', bottom: 'auto' });
+      y += e.offsetHeight + gap;
+    }
+  }
+  function createWin(id) {
+    const el = document.createElement('div');
+    el.className = 'panel';
+    el.style.display = 'none';
+    el.innerHTML = '<div class="title"><i></i><span class="nm"></span><small>⠿</small><span class="pin">📌</span><span class="x" title="Cerrar (se reactiva en ⚙ → Ventanas)">×</span></div><div class="wbody"></div>';
+    winsEl.appendChild(el);
+    const hd = el.firstElementChild, bd = el.lastElementChild;
+    for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click', 'contextmenu'])
+      hd.addEventListener(ev, e => e.stopPropagation());
+    setupDrag(el, hd, 'pos', { holder: () => winFind(id), apply: layoutWins,
+      tap: () => { const w = winFind(id); if (w) { w.collapsed = !w.collapsed; save(); render(); } } });
+    hd.addEventListener('click', e => {
+      const t = e.target.closest ? e.target.closest('.pin,.x') : null, w = winFind(id);
+      if (!t || !w) return;
+      if (t.classList.contains('x')) w.open = false; else w.pos = null;      // × cierra · 📌 vuelve a su sitio
+      save(); render(); buildWinPane();
+    });
+    winEls.set(id, { el, hd, bd, nm: hd.querySelector('.nm'), sm: hd.querySelector('small'), pin: hd.querySelector('.pin'), html: null });
+  }
+  function syncWins() {
+    const ids = new Set(cfg.wins.map(w => w.id));
+    for (const [id, o] of [...winEls]) if (!ids.has(id)) { o.el.remove(); winEls.delete(id); }
+    for (const w of cfg.wins) if (!winEls.has(w.id)) createWin(w.id);
+  }
   const applyMiniPos = setupDrag(mini, miniHandle, 'miniPos');
+  const applyDpsPos = setupDrag(dpsw, dpsHandle, 'dpsPos', { tap: () => { cfg.dpsCollapsed = !cfg.dpsCollapsed; save(); render(); } });
   const applyBtnPos = setupDrag(btn, btn, 'btnPos', { tap: () => menu.classList.toggle('open'), reset: false });
+
+  // [título, opción que muestra/oculta la ventana, opción con su posición]
+  const WINDOWS = [[miniHandle, 'mini', 'miniPos'], [dpsHandle, 'dps', 'dpsPos']];
+  for (const [h, flag, posKey] of WINDOWS) {
+    h.addEventListener('click', e => {
+      const t = e.target.closest ? e.target.closest('.pin,.x') : null;
+      if (!t) return;
+      if (t.classList.contains('x')) cfg[flag] = false; else cfg[posKey] = null;   // × cierra · 📌 vuelve a su sitio
+      save(); applyUI(); render();
+    });
+  }
+  function updatePins() {
+    for (const [h, , posKey] of WINDOWS) {
+      const el = h.querySelector('.pin'), floating = !!cfg[posKey];
+      const txt = floating ? '📍' : '📌';
+      if (el.textContent !== txt) el.textContent = txt;
+      el.title = floating ? 'Flotante: pulsa para anclarla a su sitio' : 'Anclada a su sitio: arrastra el título para soltarla';
+    }
+  }
 
   /* ---------- MÓVIL: detección y escala de la interfaz ---------- */
   const mq = q => (window.matchMedia ? matchMedia(q) : { matches: false });
   const mqCoarse = mq('(pointer: coarse)'), mqNoHover = mq('(hover: none)');
-  const COMPACT_SHOW = ['level', 'time', 'dps'];
-  const compactHidden = () => Object.fromEntries(STATS.filter(s => !COMPACT_SHOW.includes(s.k)).map(s => [s.k, 1]));
-  /** Lo que cambia "Recomendado" en el móvil: panel compacto, sin FPS ni zoom, minimapa pequeño. */
-  const recoPreset = () => mobileMode ? { fps: false, fov: false, miniSize: 'small', hidden: compactHidden() } : {};
+  /** Lo que cambia "Recomendado" en el móvil (además de la ventana compacta, ver recoWins): minimapa y gráfica pequeños. */
+  const recoPreset = () => mobileMode ? { miniSize: 'small', dpsSize: 'small' } : {};
 
   function detectMobile() {
     if (cfg.uiMode === 'mobile') return true;
@@ -632,10 +816,10 @@
     UO = lim(UI, 0.8, 1.4);
     host.style.setProperty('--s', UI.toFixed(3));
     host.classList.toggle('m', mobileMode);
-    if (mobileMode && cfg.uiMode === 'auto' && !cfg.mobInit) { cfg.mobInit = true; Object.assign(cfg, recoPreset()); save(); }
+    if (mobileMode && cfg.uiMode === 'auto' && !cfg.mobInit) { cfg.mobInit = true; Object.assign(cfg, recoPreset(), { wins: recoWins() }); save(); }
     const info = root.getElementById('uiinfo');
     if (info) info.textContent = `${mobileMode ? 'Móvil' : 'Escritorio'} · interfaz al ${Math.round(UI * 100)} %`;
-    applyPos(); applyMiniPos(); applyBtnPos();
+    layoutWins(); applyMiniPos(); applyDpsPos(); applyBtnPos();
   }
   addEventListener('resize', applyUI);
   addEventListener('orientationchange', () => setTimeout(applyUI, 250));
@@ -650,6 +834,21 @@
   const bar = (label, text, pct, color) => `<div class="bar"><div class="lbl"><span>${label}</span><b>${text}</b></div>
     <div class="track"><div class="fill" style="width:${pct * 100}%;background:${color}"></div></div></div>`;
 
+  /** HTML de un dato dentro de una ventana: {kind: 'top' (FPS, zoom, barras) | 'row', html} o null si no hay nada que mostrar. */
+  function itemHtml(k, p) {
+    if (k === 'fps') return { kind: 'top', html: row('FPS', fps, fps >= 55 ? 'good' : fps >= 30 ? 'warn' : 'bad') };
+    if (k === 'fov') return { kind: 'top', html: row('Campo de visión', `${Z.toFixed(2)}×${Cam && Cam._psHooked ? '' : ' ⚠'}`, Cam && Cam._psHooked ? '' : 'bad') };
+    if (!p) return null;
+    if (k === 'hp') {
+      const f = p.maxHp > 0 ? lim(p.hp / p.maxHp, 0, 1) : 0;
+      return { kind: 'top', html: bar('Vida', `${fmt(Math.ceil(p.hp))} / ${fmt(Math.round(p.maxHp))}`, f, f > .5 ? '#46d37a' : f > .25 ? '#ffd166' : '#ff5c5c') };
+    }
+    if (k === 'xp') return { kind: 'top', html: bar('XP', `${fmt(Math.floor(p.xp))} / ${fmt(p.xpNext)}`, p.xpNext > 0 ? lim(p.xp / p.xpNext, 0, 1) : 0, '#4d8dff') };
+    const s = STATS_BY[k]; if (!s) return null;
+    let v; try { v = s.get(p); } catch { return null; }
+    return { kind: 'row', html: row(s.label, fmt(v)) };
+  }
+
   function render() {
     // Se vuelve a buscar al jugador cada 300 ms: así se engancha al nuevo al empezar otra partida
     // (el anterior sigue "válido" en `instances`, por eso no basta con comprobar si lo es).
@@ -659,41 +858,42 @@
     if (now - lastScan > 300) { player = currentPlayer(); lastScan = now; }
     const p = isPlayer(player) ? player : null;
     tick(p);
+    dpsFrame(p);
+    updatePins();
 
     for (const i of menu.querySelectorAll('[data-k]')) {            // sincroniza controles (p. ej. tras F8 o Recomendado)
       const k = i.dataset.k;
       if (i.type === 'range') { const v = k === 'zoom' ? Z : cfg[k]; if (root.activeElement !== i && Math.abs(i.value - v) > 0.001) i.value = v; continue; }
       if (i.tagName === 'SELECT') { if (i.value !== cfg[k]) i.value = cfg[k]; continue; }
-      const on = k.startsWith('s:') ? !cfg.hidden[k.slice(2)] : cfg[k];
+      const on = cfg[k];
       if (i.checked !== !!on) i.checked = !!on;
     }
 
-    let h = '';
-    if (cfg.fps) h += row('FPS', fps, fps >= 55 ? 'good' : fps >= 30 ? 'warn' : 'bad');
-    if (cfg.fov) h += row('Campo de visión', `${Z.toFixed(2)}×${Cam && Cam._psHooked ? '' : ' ⚠'}`, Cam && Cam._psHooked ? '' : 'bad');
-    if (p) {
-      if (cfg.hp) {
-        const f = p.maxHp > 0 ? lim(p.hp / p.maxHp, 0, 1) : 0;
-        h += bar('Vida', `${fmt(Math.ceil(p.hp))} / ${fmt(Math.round(p.maxHp))}`, f, f > .5 ? '#46d37a' : f > .25 ? '#ffd166' : '#ff5c5c');
+    syncWins();
+    for (const w of cfg.wins) {
+      const o = winEls.get(w.id); if (!o) continue;
+      let h = '', prev = '';
+      for (const k of w.items) {
+        const it = itemHtml(k, p); if (!it) continue;
+        if (prev === 'top' && it.kind === 'row') h += '<div class="sep"></div>';
+        h += it.html; prev = it.kind;
       }
-      if (cfg.xp) h += bar('XP', `${fmt(Math.floor(p.xp))} / ${fmt(p.xpNext)}`, p.xpNext > 0 ? lim(p.xp / p.xpNext, 0, 1) : 0, '#4d8dff');
-      const rows = [];
-      for (const s of STATS) {
-        if (cfg.hidden[s.k]) continue;
-        let v; try { v = s.get(p); } catch { continue; }
-        rows.push(row(s.label, fmt(v)));
-      }
-      if (rows.length && h) h += '<div class="sep"></div>';
-      h += rows.join('');
-    } else if (cfg.panel) h += '<div class="sep"></div><div class="empty">Esperando partida…</div>';
-
-    panel.style.display = cfg.panel && h ? 'block' : 'none';
-    panel.classList.toggle('collapsed', !!cfg.collapsed);
-    body.style.display = cfg.collapsed ? 'none' : '';
-    handle.querySelector('small').textContent = cfg.collapsed ? '▸' : '⠿';
-    body.innerHTML = h;
-    applyPos();
+      if (!p && w.items.some(k => k !== 'fps' && k !== 'fov')) h += (h ? '<div class="sep"></div>' : '') + '<div class="empty">Esperando partida…</div>';
+      if (!w.items.length) h = '<div class="empty">Ventana vacía · ⚙ → Ventanas</div>';
+      o.el.style.display = cfg.panel && w.open !== false && h ? 'block' : 'none';
+      o.el.classList.toggle('collapsed', !!w.collapsed);
+      o.bd.style.display = w.collapsed ? 'none' : '';
+      const nm = w.name || 'Ventana', sm = w.collapsed ? '▸' : '⠿';
+      if (o.nm.textContent !== nm) o.nm.textContent = nm;
+      if (o.sm.textContent !== sm) o.sm.textContent = sm;
+      if (o.html !== h) { o.bd.innerHTML = h; o.html = h; }
+      const txt = w.pos ? '📍' : '📌';
+      if (o.pin.textContent !== txt) o.pin.textContent = txt;
+      o.pin.title = w.pos ? 'Flotante: pulsa para anclarla a su sitio' : 'Anclada a su sitio: arrastra el título para soltarla';
+    }
+    layoutWins();
     applyMiniPos();
+    applyDpsPos();
   }
 
   /* ---------- AVISOS, GUARDADO, TÍTULO ---------- */
@@ -783,18 +983,19 @@
   function hookStatus() {
     return { world: pageWorld() ? 'página' : (document.readyState === 'loading' ? 'cargando' : 'AISLADO'),
              camera: !!(Cam && Cam._psHooked), G: !!gl(), jugador: isPlayer(player), instancias: instances.length,
-             zoom: Z, ultimoResize: last, version: '0.17', navegador: navigator.userAgent };
+             zoom: Z, ultimoResize: last, version: '0.19', navegador: navigator.userAgent };
   }
-  window.__PS = { pois: () => pois, player: () => player, hazards: () => hazards, cam: () => Cam, g: () => gl(), status: hookStatus };   // para depurar desde la consola
+  window.__PS = { pois: () => pois, player: () => player, hazards: () => hazards, cam: () => Cam, g: () => gl(), status: hookStatus, dps: () => dpsHist };   // para depurar desde la consola
 
   /* ---------- TICK (4 veces por segundo): métricas, avisos, título, auto-cambio ---------- */
   let lastP = null, samples = [], seenIds = new Set(), seenPoi = new Set(), lastAuto = -1e9, lastAutoPause = -1e9, baseTitle = '';
   let bossN = 0; const bossIds = new Set();      // jefes normales ya aparecidos en esta run (los legendarios de grieta no cuentan)
+  let dpsHist = [], dpsPeak = 0;                 // historial de DPS de la run: [segundo de juego, DPS (media de 5 s)]
   const inRun = p => p && performance.now() - (p._psUpd || 0) < 1500;
 
   function tick(p) {
     const G = gl(), now = performance.now();
-    if (p !== lastP) { lastP = p; hazards.length = 0; samples = []; seenIds.clear(); seenPoi.clear(); pois = []; metrics.dps = 0; bossIds.clear(); bossN = 0; }
+    if (p !== lastP) { lastP = p; hazards.length = 0; samples = []; seenIds.clear(); seenPoi.clear(); pois = []; metrics.dps = 0; bossIds.clear(); bossN = 0; dpsHist = []; dpsPeak = 0; }
     if (!/^❤/.test(document.title)) baseTitle = document.title;
     if (!p || !inRun(p)) { if (/^❤/.test(document.title)) document.title = baseTitle; return; }
 
@@ -803,6 +1004,15 @@
     while (samples.length > 2 && t - samples[0][0] > 5) samples.shift();
     const a = samples[0];
     metrics.dps = t - a[0] > 0.4 ? Math.max(0, ((p.dmgDealt || 0) - a[1]) / (t - a[0])) : 0;
+
+    // historial para la gráfica (un punto cada 0,5 s de juego; si crece mucho se aclara a la mitad)
+    const lh = dpsHist[dpsHist.length - 1];
+    if (lh && t < lh[0]) { dpsHist = []; dpsPeak = 0; }
+    if (!dpsHist.length || t - dpsHist[dpsHist.length - 1][0] >= 0.5) {
+      dpsHist.push([t, metrics.dps]);
+      if (dpsHist.length > 6000) dpsHist = dpsHist.filter((_, i) => i % 2 === 0);
+    }
+    if (metrics.dps > dpsPeak) dpsPeak = metrics.dps;
 
     if (G?.EnemyMgr) for (const e of G.EnemyMgr.all()) {
       if (e.boss && !e.legend && !e.judge && !bossIds.has(e.id)) { bossIds.add(e.id); bossN++; }
@@ -833,6 +1043,89 @@
     }
   }
 
+  /* ---------- GRÁFICA DE DPS ----------
+     Ventana propia con la evolución del DPS (media móvil de 5 s) sobre el reloj de la partida. */
+  const dctx = dcv.getContext('2d');
+  const DPS_SIZES = { small: [200, 90], medium: [260, 120], large: [360, 170] };
+  const dpsNum = v => v >= 10000 ? `${Math.round(v / 1000)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
+  const niceMax = v => {                                              // techo "redondo" para el eje Y
+    if (!(v > 0)) return 10;
+    const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e;
+  };
+  let dpsKey = '';
+  function dpsFrame(p) {
+    const show = !!(cfg.dps && p);
+    dpsw.style.display = show ? 'block' : 'none';
+    if (!show) return;
+    dpsw.classList.toggle('collapsed', !!cfg.dpsCollapsed);
+    dpsHandle.querySelector('small').textContent = cfg.dpsCollapsed ? '▸' : '⠿';
+    dcv.style.display = cfg.dpsCollapsed ? 'none' : 'block';
+    if (cfg.dpsCollapsed) return;
+    const [W, H] = DPS_SIZES[cfg.dpsSize] || DPS_SIZES.medium;
+    const dpr = window.devicePixelRatio || 1, key = W + 'x' + H + '@' + dpr + '@' + UI.toFixed(3);
+    if (key !== dpsKey) {
+      dpsKey = key;
+      dcv.width = Math.round(W * UI * dpr); dcv.height = Math.round(H * UI * dpr);
+      dcv.style.width = (W * UI) + 'px'; dcv.style.height = (H * UI) + 'px';
+    }
+    const c = dctx;
+    c.setTransform(dpr * UI, 0, 0, dpr * UI, 0, 0);
+    c.clearRect(0, 0, W, H);
+    const t = p._psTime || 0, cur = metrics.dps;
+    const avg = t > 1 ? (p.dmgDealt || 0) / t : 0;
+    const rangeS = cfg.dpsRange === 'run' ? 0 : (+cfg.dpsRange || 120);
+    const span = rangeS || Math.max(30, t), tStart = rangeS ? Math.max(0, t - rangeS) : 0;
+    const L = 34, R = W - 6, T = 20, B = H - 16, pw = R - L, ph = B - T;
+
+    // cabecera: ahora · media · máximo
+    c.font = '700 10px sans-serif'; c.textBaseline = 'middle'; c.textAlign = 'left';
+    c.fillStyle = '#fff'; c.fillText(`${dpsNum(cur)}`, L, 9);
+    let x = L + c.measureText(`${dpsNum(cur)}`).width + 5;
+    c.font = '10px sans-serif'; c.fillStyle = '#9fb0d4';
+    c.fillText(`ahora · media ${dpsNum(avg)} · máx ${dpsNum(dpsPeak)}`, x, 9);
+
+    const pts = dpsHist.filter(q => q[0] >= tStart - span * 0.02);
+    let vmax = 0; for (const q of pts) if (q[1] > vmax) vmax = q[1];
+    const top = niceMax(Math.max(vmax * 1.08, 10));
+    const X = ti => L + (ti - tStart) / span * pw, Y = v => B - Math.min(v, top) / top * ph;
+
+    // rejilla y etiquetas del eje Y
+    c.lineWidth = 1; c.strokeStyle = 'rgba(255,255,255,.12)'; c.fillStyle = '#7d8db3'; c.textAlign = 'right';
+    for (let i = 0; i <= 2; i++) {
+      const v = top * i / 2, y = Math.round(Y(v)) + 0.5;
+      c.beginPath(); c.moveTo(L, y); c.lineTo(R, y); c.stroke();
+      c.fillText(dpsNum(v), L - 4, Math.min(Math.max(y, T + 3), B));
+    }
+    // etiquetas del eje X (tiempo de partida)
+    c.textAlign = 'left'; c.fillText(fmtT(tStart), L, H - 6);
+    c.textAlign = 'right'; c.fillText(fmtT(tStart + span), R, H - 6);
+
+    if (pts.length < 2) {
+      c.fillStyle = 'rgba(159,176,212,.85)'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText('Recogiendo datos…', (L + R) / 2, (T + B) / 2);
+      return;
+    }
+    // línea de la media de la partida
+    if (avg > 0) {
+      c.save(); c.setLineDash([4, 4]); c.strokeStyle = 'rgba(255,209,102,.6)';
+      const ya = Math.round(Y(avg)) + 0.5; c.beginPath(); c.moveTo(L, ya); c.lineTo(R, ya); c.stroke(); c.restore();
+    }
+    // área + línea
+    c.save(); c.beginPath(); c.rect(L, T - 2, pw, ph + 2); c.clip();
+    c.beginPath(); c.moveTo(X(pts[0][0]), B);
+    for (const q of pts) c.lineTo(X(q[0]), Y(q[1]));
+    c.lineTo(X(pts[pts.length - 1][0]), B); c.closePath();
+    const gr = c.createLinearGradient(0, T, 0, B); gr.addColorStop(0, 'rgba(77,141,255,.55)'); gr.addColorStop(1, 'rgba(77,141,255,.04)');
+    c.fillStyle = gr; c.fill();
+    c.beginPath(); pts.forEach((q, i) => i ? c.lineTo(X(q[0]), Y(q[1])) : c.moveTo(X(q[0]), Y(q[1])));
+    c.lineWidth = 1.6; c.lineJoin = 'round'; c.strokeStyle = '#6aa3ff'; c.stroke();
+    c.restore();
+    // punto actual
+    const lq = pts[pts.length - 1];
+    c.beginPath(); c.arc(X(lq[0]), Y(lq[1]), 2.6, 0, 6.2832); c.fillStyle = '#fff'; c.fill();
+  }
+
   /* ---------- PAUSA AL SALIR DE LA PESTAÑA ---------- */
   function autoPause() {
     const now = performance.now();
@@ -850,7 +1143,7 @@
   const cv = $('ov'), octx = cv.getContext('2d');
   let gc = null;
   const getGC = () => (gc && gc.isConnected) ? gc :
-    (gc = [...document.querySelectorAll('canvas')].filter(c => c !== cv && c.clientWidth > 300)
+    (gc = [...document.querySelectorAll('canvas')].filter(c => c !== cv && c !== mcv && c !== dcv && c.clientWidth > 300)
       .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0] || null);
 
   function badge(x, y, ang, col, glyph) {
